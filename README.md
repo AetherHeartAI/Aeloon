@@ -5,7 +5,8 @@
 <div align="center">
 
 <p align="left">
-  <img src="./assets/AH.svg" alt="Aether Heart" height="60" />
+  <img src="./assets/AE-logo.svg#gh-light-mode-only" alt="Aether Heart" height="60" />
+  <img src="./assets/AE-logo-dark.svg#gh-dark-mode-only" alt="Aether Heart" height="60" />
 </p>
 
 <p align="center">
@@ -13,7 +14,8 @@
 </p>
 
 <p align="center">
-  <img src="./assets/Aeloon.svg" alt="Aeloon" height="40" />
+  <img src="./assets/Aeloon.svg#gh-light-mode-only" alt="Aeloon" height="40" />
+  <img src="./assets/Aeloon-dark.svg#gh-dark-mode-only" alt="Aeloon" height="40" />
 </p>
 
 A **safe · light · fast** AI Agent
