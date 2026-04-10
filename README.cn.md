@@ -16,7 +16,7 @@
   <img src="./assets/Aeloon.svg" alt="Aeloon" height="40" />
 </p>
 
-**安全 · 轻量 · 快速** 的 AI 智能体运行时
+**安全 · 轻量 · 快速** 的 AI 智能体
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
