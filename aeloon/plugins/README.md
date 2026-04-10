@@ -269,7 +269,6 @@ Hook 类型：
 | 插件 | 指南 | 说明 |
 |------|------|------|
 | **ScienceResearch** | [`README-SR.md`](ScienceResearch/README-SR.md) | AI4S 科研任务插件完整指南 |
-| **SoftwareEngineering** | [`README-SE.md`](SoftwareEngineering/README-SE.md) | AI4SE 软件工程插件完整指南 |
 | **Wiki** | [`README.md`](Wiki/README.md) | 本地知识库管理插件完整指南 |
 | **ACP Bridge** | [`README.md`](acp_bridge/README.md) | ACP 协议桥接：连接外部智能体服务器 |
 | **PluginCreator** | [`README-PC.md`](PluginCreator/README-PC.md) | 插件开发工作流智能规划器完整指南 |
