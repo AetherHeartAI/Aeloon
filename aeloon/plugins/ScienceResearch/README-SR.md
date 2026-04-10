@@ -1,95 +1,99 @@
-# ScienceResearch Plugin Development Guide
+<p align="right">
+<a href="./README.md">English</a> | <b>中文</b>
+</p>
 
-A comprehensive guide for the ScienceResearch (AI4S) plugin — covering architecture, runtime flow, data models, operations, and extension patterns.
+# ScienceResearch 插件开发指南
 
-## Table of Contents
+ScienceResearch (AI4S) 插件综合指南 —— 涵盖架构、运行时流程、数据模型、运维和扩展模式。
 
-1. [Overview](#overview)
-2. [Architecture](#architecture)
-3. [Runtime Flow](#runtime-flow)
-4. [Data Models](#data-models)
-5. [Operations](#operations)
-6. [Extension Guide](#extension-guide)
-7. [API Reference](#api-reference)
+## 目录
+
+1. [概述](#概述)
+2. [架构](#架构)
+3. [运行时流程](#运行时流程)
+4. [数据模型](#数据模型)
+5. [运维](#运维)
+6. [扩展指南](#扩展指南)
+7. [API 参考](#api-参考)
 
 ---
 
-## Overview
+## 概述
 
-### What is ScienceResearch Plugin
+### 什么是 ScienceResearch 插件
 
-The `ScienceResearch` plugin is an **AI4S (AI for Science)** mode on Aeloon that transforms natural language scientific research queries into executable multi-step task graphs. It operates on the existing Aeloon Agent Runtime to accomplish:
+`ScienceResearch` 插件是 Aeloon 上的 **AI4S (AI for Science)** 模式，将自然语言的科学研究查询转换为可执行的多步骤任务图。它在现有的 Aeloon Agent Runtime 上运行，完成以下功能：
 
-- Task interpretation
-- Plan generation
-- Node execution
-- Output validation
-- Result delivery
-- Process archiving
+- 任务解释
+- 计划生成
+- 节点执行
+- 输出验证
+- 结果交付
+- 过程存档
 
-It is not a standalone application but an **incremental mode** built on top of Aeloon's existing Agent capabilities.
+它不是一个独立的应用程序，而是建立在 Aeloon 现有 Agent 能力之上的**增量模式**。
 
-### Design Goals
+### 设计目标
 
-**Goal 1: Add Research Task Capabilities Without Disrupting Normal Assistant Mode**
+**目标一：在不干扰正常助手模式的情况下添加研究任务能力**
 
-The ScienceResearch plugin integrates into the `Dispatcher` via lazy loading — it only loads when the `/sr` command or `aeloon sr` CLI is triggered, avoiding impact on regular conversation flows.
+ScienceResearch 插件通过延迟加载集成到 `Dispatcher` 中 —— 仅在触发 `/sr` 命令或 `aeloon sr` CLI 时加载，避免影响常规对话流程。
 
-**Goal 2: Model "Scientific Tasks" as Structured Objects**
+**目标二：将"科学任务"建模为结构化对象**
 
-Unlike regular chat, scientific tasks typically include:
+与普通聊天不同，科学任务通常包括：
 
-- Clear objectives
-- Decomposable sub-steps
-- Dependency relationships
-- Resource constraints
-- Output specifications
-- Verifiable standards
+- 明确的目标
+- 可分解的子步骤
+- 依赖关系
+- 资源约束
+- 输出规范
+- 可验证的标准
 
-Therefore, the plugin models tasks as structured objects: `Task`, `ScienceTaskNode`, `ScienceTaskGraph`, `Execution`, `Validation`.
+因此，插件将任务建模为结构化对象：`Task`、`ScienceTaskNode`、`ScienceTaskGraph`、`Execution`、`Validation`。
 
-**Goal 3: Reuse Aeloon Existing Infrastructure**
+**目标三：复用 Aeloon 现有基础设施**
 
-The plugin reuses:
+插件复用了：
 
 - `AgentLoop`
 - `Dispatcher`
 - `MessageBus`
-- `process_direct()` call path
-- Tool Registry / Tool call chains
-- Middleware extension points
-- Configuration system
+- `process_direct()` 调用路径
+- 工具注册表 / 工具调用链
+- 中间件扩展点
+- 配置系统
 
-This allows the science agent to directly benefit from Aeloon's existing channels, models, tools, sessions, logging, and security capabilities.
+这使得科学智能体能够直接受益于 Aeloon 现有的频道、模型、工具、会话、日志记录和安全能力。
 
-### Current Version Capabilities (v0.1.0)
+### 当前版本能力 (v0.1.0)
 
-Current version focuses on the "literature analysis" vertical slice.
+当前版本专注于"文献分析"垂直领域。
 
-**Implemented:**
+**已实现：**
 
-- Rule-based task interpretation
-- Literature retrieval/fetching/synthesis plan templates
-- Dependency-based DAG orchestration
-- Node-level retry
-- Time/Token/Tool call budget constraints
-- Structural and semantic validation
-- JSONL persistence
-- Asset templates and failure mode recording
-- Audit logging
-- Risk gate stubs
+- 基于规则的任务解释
+- 文献检索/获取/综合计划模板
+- 基于依赖的 DAG 编排
+- 节点级重试
+- 时间/令牌/工具调用预算约束
+- 结构和语义验证
+- JSONL 持久化
+- 资产模板和失败模式记录
+- 审计日志
+- 风险门控存根
 
-**Not Yet Implemented (Stubs Only):**
+**尚未实现（仅存根）：**
 
-- LLM-based intent structured extraction
-- Multi-round clarification dialog
-- Human approval flow for red-risk levels
-- SQLite storage backend
-- Second scientific scenario (e.g., numerical computation, materials simulation)
+- 基于 LLM 的意图结构化提取
+- 多轮澄清对话
+- 红色风险级别的人工审批流程
+- SQLite 存储后端
+- 第二种科学场景（例如数值计算、材料模拟）
 
-### Typical Usage Patterns
+### 典型使用模式
 
-**Pattern 1: Slash command in channels**
+**模式一：频道中的斜杠命令**
 
 ```text
 /sr search for recent papers on perovskite solar cell efficiency
@@ -98,13 +102,13 @@ Current version focuses on the "literature analysis" vertical slice.
 /sr help
 ```
 
-**Pattern 2: CLI invocation**
+**模式二：CLI 调用**
 
 ```bash
 aeloon sr -m "summarize the state of high-entropy alloy research in catalysis"
 ```
 
-**Pattern 3: Internal Python call**
+**模式三：内部 Python 调用**
 
 ```python
 from aeloon.plugins.ScienceResearch.pipeline import SciencePipeline
@@ -113,51 +117,51 @@ pipeline = SciencePipeline(runtime=runtime)
 output, task = await pipeline.run("find recent papers on protein structure prediction")
 ```
 
-### Suitable Problem Types
+### 适用的问题类型
 
-The current implementation is better suited for:
+当前实现更适合：
 
-- Literature surveys
-- Review summaries
-- Thematic branch parallel retrieval
-- Multi-source aggregation
-- Markdown report generation with citations
+- 文献调研
+- 综述总结
+- 主题分支并行检索
+- 多源聚合
+- 带引用的 Markdown 报告生成
 
-Examples:
+示例：
 
-- "Retrieve papers on perovskite solar cell efficiency improvements in the past three years and summarize trends"
-- "Compare major research routes in high-entropy alloy catalysis"
-- "Summarize latest progress in protein structure prediction with representative works"
+- "检索过去三年钙钛矿太阳能电池效率提升的论文并总结趋势"
+- "比较高熵合金催化中的主要研究路线"
+- "总结蛋白质结构预测的最新进展及代表性工作"
 
-### Default Workflow
+### 默认工作流
 
-In single-scope tasks, the default plan is roughly:
+在单范围任务中，默认计划大致为：
 
 1. `search`
 2. `fetch`
 3. `synthesize`
 
-In multi-scope tasks, multiple `search_i -> fetch_i` branches are formed, eventually converging into a single `synthesize` node.
+在多范围任务中，形成多个 `search_i -> fetch_i` 分支，最终汇聚到单个 `synthesize` 节点。
 
 ---
 
-## Architecture
+## 架构
 
-### Architecture Overview
+### 架构概述
 
-The ScienceResearch plugin's architectural principles:
+ScienceResearch 插件的架构原则：
 
-- **Thin entry points**: Dispatcher and CLI only handle access and forwarding
-- **Centralized core**: `SciencePipeline` controls the main flow
-- **Layered execution**: Planner produces graphs, Orchestrator executes graphs, Validator checks results
-- **Persistable state**: Task / Execution stored in JSONL
-- **Pluggable governance**: Budget, audit, risk gates through Middleware extensions
+- **薄入口点**：Dispatcher 和 CLI 仅处理访问和转发
+- **集中核心**：`SciencePipeline` 控制主流程
+- **分层执行**：Planner 生成图，Orchestrator 执行图，Validator 检查结果
+- **可持久化状态**：Task / Execution 存储在 JSONL 中
+- **可插拔治理**：通过中间件扩展实现预算、审计、风险门控
 
-### Module Layers
+### 模块层次
 
 ```text
 ┌──────────────────────────────────────────────┐
-│ Integration Layer                            │
+│ 集成层                                        │
 │ - Dispatcher (/sr)                           │
 │ - CLI (aeloon sr -m "...")                   │
 │ - Config (ScienceConfig / GovernanceConfig)  │
@@ -165,10 +169,9 @@ The ScienceResearch plugin's architectural principles:
                     │
                     ▼
 ┌──────────────────────────────────────────────┐
-│ Pipeline Layer                               │
+│ 流水线层                                     │
 │ - SciencePipeline                            │
-│   Responsible for interpret / plan /         │
-│   orchestrate / validate / deliver           │
+│   负责解释 / 计划 / 编排 / 验证 / 交付       │
 └──────────────────────────────────────────────┘
                     │
         ┌───────────┼───────────┐
@@ -186,48 +189,48 @@ The ScienceResearch plugin's architectural principles:
         └────────────┘ └────────────┘
 ```
 
-### Directory Structure
+### 目录结构
 
 ```text
 aeloon/plugins/ScienceResearch/
 ├── __init__.py
-├── aeloon.plugin.json          # Plugin manifest (id, entry, provides, requires)
-├── plugin.py                   # Plugin SDK entry (SciencePlugin)
-├── pipeline.py                 # SciencePipeline main controller
-├── config.py                   # ScienceConfig configuration model
-├── task.py                     # Domain models: Task, ScienceTaskNode, ...
-├── planner.py                  # Task to graph: LinearPlanner, DAGPlanner
-├── orchestrator.py             # Graph execution: SequentialOrchestrator, DAGOrchestrator
-├── validator.py                # Output validation: StructuralValidator, SemanticValidator
-├── capability.py               # Capability catalog
-├── assets.py                   # Templates and failure experience assets
+├── aeloon.plugin.json          # 插件清单 (id, entry, provides, requires)
+├── plugin.py                   # Plugin SDK 入口 (SciencePlugin)
+├── pipeline.py                 # SciencePipeline 主控制器
+├── config.py                   # ScienceConfig 配置模型
+├── task.py                     # 领域模型: Task, ScienceTaskNode, ...
+├── planner.py                  # 任务转图: LinearPlanner, DAGPlanner
+├── orchestrator.py             # 图执行: SequentialOrchestrator, DAGOrchestrator
+├── validator.py                # 输出验证: StructuralValidator, SemanticValidator
+├── capability.py               # 能力目录
+├── assets.py                   # 模板和失败经验资产
 ├── storage/
 │   ├── __init__.py
-│   └── jsonl.py                # JSONL persistence
+│   └── jsonl.py                # JSONL 持久化
 └── middleware/
     ├── __init__.py
-    ├── budget.py               # Budget middleware
-    ├── audit.py                # Audit middleware
-    └── risk_gate.py            # Risk gate middleware
+    ├── budget.py               # 预算中间件
+    ├── audit.py                # 审计中间件
+    └── risk_gate.py            # 风险门控中间件
 ```
 
-Where:
+其中：
 
-- `task.py`: Domain model definitions
-- `planner.py`: Task to graph conversion
-- `orchestrator.py`: Graph execution
-- `pipeline.py`: Main control entry
-- `validator.py`: Output validation
-- `capability.py`: Capability catalog
-- `assets.py`: Templates and failure experience assets
-- `storage/jsonl.py`: Persistence
-- `middleware/*`: Governance chain
+- `task.py`：领域模型定义
+- `planner.py`：任务转图
+- `orchestrator.py`：图执行
+- `pipeline.py`：主控制入口
+- `validator.py`：输出验证
+- `capability.py`：能力目录
+- `assets.py`：模板和失败经验资产
+- `storage/jsonl.py`：持久化
+- `middleware/*`：治理链
 
-### Integration with Aeloon Core System
+### 与 Aeloon 核心系统集成
 
-#### Plugin Registry Integration
+#### 插件注册表集成
 
-The ScienceResearch plugin registers via `aeloon.plugin.json`:
+ScienceResearch 插件通过 `aeloon.plugin.json` 注册：
 
 ```json
 {
@@ -242,10 +245,10 @@ The ScienceResearch plugin registers via `aeloon.plugin.json`:
 }
 ```
 
-The `/sr` command is dynamically routed through Plugin Registry:
+`/sr` 命令通过插件注册表动态路由：
 
 ```text
-Plugin SDK command dispatch
+Plugin SDK 命令分发
   → registry.commands["sr"]
   → CommandContext → SciencePlugin._handle_command()
     → "help"    → get_help_text()
@@ -254,64 +257,64 @@ Plugin SDK command dispatch
     → default   → pipeline.run(query)
 ```
 
-#### CLI Integration
+#### CLI 集成
 
-The plugin registers CLI via `SEPlugin._build_cli()`:
+插件通过 `SEPlugin._build_cli()` 注册 CLI：
 
-1. Receive `--message/-m` parameter
-2. Forward to Plugin Runtime execution path
+1. 接收 `--message/-m` 参数
+2. 转发到插件运行时执行路径
 
-#### Configuration Integration
+#### 配置集成
 
-The plugin registers config schema via `api.register_config_schema(ScienceConfig)`:
+插件通过 `api.register_config_schema(ScienceConfig)` 注册配置模式：
 
-- `ScienceConfig`: enabled, budget defaults, workspace path, governance config
+- `ScienceConfig`：启用状态、预算默认值、工作区路径、治理配置
 
-### Key Class Responsibilities
+### 核心类职责
 
 #### `SciencePipeline`
 
-Responsibilities:
+职责：
 
-- Input query
-- Generate `Task`
-- Call Planner to produce `ScienceTaskGraph`
-- Call Orchestrator to execute graph
-- Call Validator to validate final output
-- Format final delivery text
-- Write state to storage
+- 输入查询
+- 生成 `Task`
+- 调用 Planner 生成 `ScienceTaskGraph`
+- 调用 Orchestrator 执行图
+- 调用 Validator 验证最终输出
+- 格式化最终交付文本
+- 将状态写入存储
 
 #### `Planner`
 
-Responsibilities:
+职责：
 
-- Convert "a scientific task" into "an executable graph"
-- Current implementations:
+- 将"科学任务"转换为"可执行图"
+- 当前实现：
   - `LinearPlanner`
   - `DAGPlanner`
 
 #### `Orchestrator`
 
-Responsibilities:
+职责：
 
-- Execute nodes according to graph
-- Manage dependencies
-- Pass context
-- Handle failure and retry
-- Aggregate `Execution`
+- 按图执行节点
+- 管理依赖
+- 传递上下文
+- 处理失败和重试
+- 聚合 `Execution`
 
-Current implementations:
+当前实现：
 
 - `SequentialOrchestrator`
 - `DAGOrchestrator`
 
 #### `Validator`
 
-Responsibilities:
+职责：
 
-- Determine if node / final output meets delivery standards
+- 确定节点/最终输出是否达到交付标准
 
-Current implementations:
+当前实现：
 
 - `StructuralValidator`
 - `SemanticValidator`
@@ -319,66 +322,66 @@ Current implementations:
 
 #### `JsonlStorage`
 
-Responsibilities:
+职责：
 
-- Save `Task`
-- Save `Execution`
-- List historical tasks
-- Provide per-task artifact directory
+- 保存 `Task`
+- 保存 `Execution`
+- 列出历史任务
+- 提供每任务产物目录
 
 #### `AssetManager`
 
-Responsibilities:
+职责：
 
-- Extract successful task templates
-- Record failure patterns
-- Provide similar task retrieval
+- 提取成功任务模板
+- 记录失败模式
+- 提供相似任务检索
 
-### Macro DAG vs Micro DAG
+### 宏观 DAG vs 微观 DAG
 
-This is one of the most important designs in the entire implementation.
+这是整个实现中最重要的设计之一。
 
-**Micro DAG: Aeloon Native Capability**
+**微观 DAG：Aeloon 原生能力**
 
-Aeloon's kernel already supports concurrent scheduling of multiple tool calls within a single LLM turn. This can be understood as the **micro DAG**.
+Aeloon 的内核已经支持在单个 LLM 回合并发调度多个工具调用。这可以理解为**微观 DAG**。
 
-**Macro DAG: New Capability from ScienceResearch Plugin**
+**宏观 DAG：ScienceResearch 插件的新能力**
 
-The plugin adds **cross-step / cross-turn task graph scheduling**, i.e.:
+该插件增加了**跨步骤/跨回合的任务图调度**，即：
 
-- Which research steps go first
-- Which steps can run in parallel
-- Which steps depend on upstream results
-- Which steps should retry or terminate upon failure
+- 哪些研究步骤先执行
+- 哪些步骤可以并行运行
+- 哪些步骤依赖上游结果
+- 哪些步骤应在失败时重试或终止
 
-Can be understood as:
+可以理解为：
 
 ```text
-Science Task DAG
-  ├─ Node A: search
-  │    └─ May trigger multiple tool calls internally (micro DAG)
-  ├─ Node B: fetch
-  │    └─ May also have micro DAG internally
-  └─ Node C: synthesize
+科学任务 DAG
+  ├─ 节点 A: search
+  │    └─ 内部可能触发多个工具调用 (微观 DAG)
+  ├─ 节点 B: fetch
+  │    └─ 内部也可能有微观 DAG
+  └─ 节点 C: synthesize
 ```
 
-Thus, the ScienceResearch plugin does not replace Aeloon's kernel but adds a "scientific task orchestration layer" on top.
+因此，ScienceResearch 插件不会替代 Aeloon 的内核，而是在其上添加了一个"科学任务编排层"。
 
 ---
 
-## Runtime Flow
+## 运行时流程
 
-### Overall Call Chain
+### 总调用链
 
-Whether from channel `/sr` or CLI `aeloon sr -m "..."`, all paths converge to `SciencePipeline.run()`.
+无论是从频道 `/sr` 还是 CLI `aeloon sr -m "..."`，所有路径都汇聚到 `SciencePipeline.run()`。
 
-The overall flow:
+整体流程：
 
 ```text
-User Input
+用户输入
   │
-  ├─ Channel entry: Plugin SDK dispatch → SciencePlugin._handle_command()
-  └─ CLI entry: api.register_cli("sr") → Typer sub-command
+  ├─ 频道入口: Plugin SDK 分发 → SciencePlugin._handle_command()
+  └─ CLI 入口: api.register_cli("sr") → Typer 子命令
             │
             ▼
       SciencePipeline.run()
@@ -392,9 +395,9 @@ User Input
             └─ return (output, task)
 ```
 
-### `/sr` Channel Entry Flow
+### `/sr` 频道入口流程
 
-The `/sr` command routes to `SciencePlugin._handle_command()`:
+`/sr` 命令路由到 `SciencePlugin._handle_command()`：
 
 **help**
 
@@ -402,7 +405,7 @@ The `/sr` command routes to `SciencePlugin._handle_command()`:
 /sr help
 ```
 
-Returns help text from `get_help_text()`.
+从 `get_help_text()` 返回帮助文本。
 
 **status**
 
@@ -410,7 +413,7 @@ Returns help text from `get_help_text()`.
 /sr status
 ```
 
-Calls `pipeline.get_status()` to view the most recent science task status in the current session.
+调用 `pipeline.get_status()` 查看当前会话中最近的科学任务状态。
 
 **history**
 
@@ -418,15 +421,15 @@ Calls `pipeline.get_status()` to view the most recent science task status in the
 /sr history
 ```
 
-Calls `pipeline.get_history()` to read archived task summaries from JSONL.
+调用 `pipeline.get_history()` 从 JSONL 读取已存档的任务摘要。
 
-**query execution**
+**查询执行**
 
 ```text
 /sr <query>
 ```
 
-Constructs the query and calls:
+构建查询并调用：
 
 ```python
 output, _task = await pipeline.run(
@@ -436,30 +439,30 @@ output, _task = await pipeline.run(
 )
 ```
 
-### CLI Entry Flow
+### CLI 入口流程
 
-The CLI `sr` subcommand registers as a Typer sub-application:
+CLI `sr` 子命令注册为 Typer 子应用：
 
-1. Validate `--message/-m` parameter
-2. Output task description
+1. 验证 `--message/-m` 参数
+2. 输出任务描述
 
-### `SciencePipeline.run()` Phase Breakdown
+### `SciencePipeline.run()` 阶段分解
 
-`run()` is the main controller of the science subsystem.
+`run()` 是科学子系统的主控制器。
 
-**Phase 0: Clarification Check**
+**阶段 0：澄清检查**
 
-Calls `_check_clarification(query)`.
+调用 `_check_clarification(query)`。
 
-Current implementation:
+当前实现：
 
-- If query has fewer than 4 words, issue a reminder
-- **Does not block flow**
-- Just warns user that input is too short
+- 如果查询少于 4 个词，发出提醒
+- **不阻断流程**
+- 只是警告用户输入太短
 
-**Phase 1: Intent Interpretation**
+**阶段 1：意图解释**
 
-`_interpret()` is currently rule-based, directly converting query to `Task`:
+`_interpret()` 目前基于规则，直接将查询转换为 `Task`：
 
 - `goal = query.strip()`
 - `scope = []`
@@ -468,59 +471,59 @@ Current implementation:
 - `budget = Budget()`
 - `context.session_id = session_id`
 
-Then:
+然后：
 
-- Sets `task.status = PLANNED`
-- Saves once with `save_task(task)`
+- 设置 `task.status = PLANNED`
+- 使用 `save_task(task)` 保存一次
 
-**Phase 2: Generate Execution Graph**
+**阶段 2：生成执行图**
 
-Calls `self._planner.plan(task)`.
+调用 `self._planner.plan(task)`。
 
-Default uses `DAGPlanner`:
+默认使用 `DAGPlanner`：
 
-- If scope has 1 or fewer items, degrades to linear plan
-- If scope has multiple items, generates parallel branch DAG
+- 如果范围有 1 个或更少项目，降级为线性计划
+- 如果范围有多个项目，生成分支并行 DAG
 
-**Phase 3: Execute Task Graph**
+**阶段 3：执行任务图**
 
-Before execution:
+执行前：
 
 - `task.status = RUNNING`
-- Updates `updated_at`
-- Writes again with `save_task(task)`
+- 更新 `updated_at`
+- 再次使用 `save_task(task)` 写入
 
-Then calls:
+然后调用：
 
 ```python
 executions = await self._orchestrator.run(task, graph, on_progress)
 ```
 
-If throws:
+如果抛出：
 
-- `BudgetExceededError`: Task fails, returns budget exceeded error
-- Other exceptions: Task fails, returns generic error message
+- `BudgetExceededError`：任务失败，返回预算超出错误
+- 其他异常：任务失败，返回通用错误消息
 
-After successful execution:
+成功执行后：
 
 - `self._current_executions = executions`
-- Calls `save_execution(ex)` for each execution
+- 对每个执行调用 `save_execution(ex)`
 
-**Phase 4: Failure Propagation**
+**阶段 4：失败传播**
 
-If any execution object has `state == FAILED`:
+如果任何执行对象的 `state == FAILED`：
 
-- Task overall marked as `FAILED`
-- Aggregates error reasons
-- Returns `"Error: Science task failed — ..."`
+- 任务整体标记为 `FAILED`
+- 聚合错误原因
+- 返回 `"Error: Science task failed — ..."`
 
-**Phase 5: Final Output Validation**
+**阶段 5：最终输出验证**
 
-If nodes haven't failed:
+如果节点没有失败：
 
 - `task.status = VALIDATING`
-- Finds last execution result with `output`
-- Calls default validator chain
+- 查找最后一个有 `output` 的执行结果
+- 调用默认验证器链
 
 ```python
 validation = self._validator.validate(
@@ -530,26 +533,26 @@ validation = self._validator.validate(
 )
 ```
 
-**Phase 6: Update Task Final State and Deliver**
+**阶段 6：更新任务最终状态并交付**
 
-Based on validation result:
+基于验证结果：
 
-- `DELIVER` or non-`failed` -> `task.status = COMPLETED`
-- Otherwise -> `FAILED`
+- `DELIVER` 或非 `failed` -> `task.status = COMPLETED`
+- 否则 -> `FAILED`
 
-Finally calls `_format_output()` to output Markdown text.
+最后调用 `_format_output()` 输出 Markdown 文本。
 
-### Planner Behavior
+### Planner 行为
 
 **`LinearPlanner`**
 
-Linear plan template:
+线性计划模板：
 
 1. `search`
 2. `fetch`
 3. `synthesize`
 
-Each node contains:
+每个节点包含：
 
 - `objective`
 - `dependencies`
@@ -561,7 +564,7 @@ Each node contains:
 
 **`DAGPlanner`**
 
-When task has multiple scopes, generates:
+当任务有多个范围时，生成：
 
 ```text
 search_0 -> fetch_0 \
@@ -569,39 +572,39 @@ search_1 -> fetch_1  \
 search_2 -> fetch_2   -> synthesize
 ```
 
-Characteristics:
+特点：
 
-- Max 4 parallel branches
-- Each branch search then fetch
-- All fetches complete before synthesize
+- 最多 4 个并行分支
+- 每个分支先搜索后获取
+- 所有获取完成后才合成
 
-### Orchestrator Behavior
+### Orchestrator 行为
 
 **`SequentialOrchestrator`**
 
-Used for walking skeleton version.
+用于骨架版本。
 
-Characteristics:
+特点：
 
-- Execute serially in topological order
-- Previous step output appended to next step prompt
-- Stop subsequent execution on single node failure
+- 按拓扑顺序串行执行
+- 上一步输出拼接到下一步 prompt
+- 单节点失败停止后续执行
 
 **`DAGOrchestrator`**
 
-Current default executor.
+当前默认执行器。
 
-Core behavior:
+核心行为：
 
-- Maintains `pending_deps`
-- Each round finds all nodes with satisfied dependencies `ready_ids`
-- Execute concurrently in waves
-- Concurrency within wave via `asyncio.gather()`
-- Budget check between rounds
+- 维护 `pending_deps`
+- 每轮找出依赖已满足的节点 `ready_ids`
+- 以 wave 形式并发执行
+- wave 内通过 `asyncio.gather()` 并发
+- 轮次间检查预算
 
-**Node Execution**
+**节点执行**
 
-Nodes are ultimately executed through Aeloon native capabilities:
+节点最终通过 Aeloon 原生能力执行：
 
 ```python
 output = await self._agent_loop.process_direct(
@@ -613,32 +616,32 @@ output = await self._agent_loop.process_direct(
 )
 ```
 
-Thus science nodes are essentially "driving Aeloon Agent to complete a task with contextual constraints".
+因此科学节点本质上是"驱动 Aeloon Agent 在上下文约束下完成任务"。
 
-**Retry Logic**
+**重试逻辑**
 
-`_execute_with_retry()`:
+`_execute_with_retry()`：
 
-- Reads `node.retry_policy`
+- 读取 `node.retry_policy`
 - `max_attempts = 1 + max_retries`
-- From 2nd attempt, sleep according to `backoff_seconds * (attempt - 1)`
-- Throws last exception after all attempts fail
+- 从第 2 次尝试开始，按 `backoff_seconds * (attempt - 1)` 休眠
+- 所有尝试失败后抛出最后一个异常
 
-**Failure Handling**
+**失败处理**
 
-If any node fails in a wave:
+如果 wave 中任何节点失败：
 
-- Failed node marked as `FAILED`
-- Other unrun nodes marked as `CANCELLED`
-- Overall graph execution stops
+- 失败节点标记为 `FAILED`
+- 其他未运行节点标记为 `CANCELLED`
+- 整体图执行停止
 
-**Deadlock Protection**
+**死锁保护**
 
-If `pending_deps` is non-empty but no `ready_ids`, indicates abnormal dependencies in graph, directly throws `RuntimeError("Deadlock ...")`.
+如果 `pending_deps` 非空但没有 `ready_ids`，表示图中依赖异常，直接抛出 `RuntimeError("Deadlock ...")`。
 
-### Validation Flow
+### 验证流程
 
-Default validator:
+默认验证器：
 
 ```text
 CompositeValidator(
@@ -647,50 +650,50 @@ CompositeValidator(
 )
 ```
 
-**Structural Validation**
+**结构验证**
 
-Checks:
+检查：
 
-- Whether output length is sufficient
-- Whether required sections exist
-- Whether source URLs / DOI / arXiv citations are present
+- 输出长度是否足够
+- 必需章节是否存在
+- 源 URL / DOI / arXiv 引用是否存在
 
-**Semantic Validation**
+**语义验证**
 
-Extracts keywords from `task_goal`, calculates output coverage.
+从 `task_goal` 提取关键词，计算输出覆盖率。
 
-If coverage below threshold:
+如果覆盖率低于阈值：
 
-- Marks warning
-- Status typically `PARTIAL`
+- 标记警告
+- 状态通常为 `PARTIAL`
 
-**Composite Validation**
+**复合验证**
 
-Merge rules:
+合并规则：
 
-- Status worst-wins: `FAILED > PARTIAL > PASSED`
-- `next_action` worst-wins
-- `confidence` takes minimum value
+- 状态最差胜出：`FAILED > PARTIAL > PASSED`
+- `next_action` 最差胜出
+- `confidence` 取最小值
 
 ---
 
-## Data Models
+## 数据模型
 
-### Core Domain Models
+### 核心领域模型
 
 **Task**
 
-The primary container for a scientific research task.
+科学研究任务的主容器。
 
 ```python
 class Task(BaseModel):
     task_id: str                    # UUID
-    goal: str                       # Research objective
-    scope: list[str]                # Research sub-scopes
-    constraints: Constraints        # Time, budget, quality constraints
-    deliverables: Deliverables      # Expected output format
-    budget: Budget                  # Resource budget
-    context: TaskContext            # Session and metadata
+    goal: str                       # 研究目标
+    scope: list[str]                # 研究子范围
+    constraints: Constraints        # 时间、预算、质量约束
+    deliverables: Deliverables      # 预期输出格式
+    budget: Budget                  # 资源预算
+    context: TaskContext            # 会话和元数据
     status: TaskStatus              # CREATED -> PLANNED -> RUNNING -> ...
     created_at: datetime
     updated_at: datetime
@@ -698,24 +701,24 @@ class Task(BaseModel):
 
 **ScienceTaskNode**
 
-Individual executable unit within a task graph.
+任务图中的单个可执行单元。
 
 ```python
 class ScienceTaskNode(BaseModel):
     node_id: str
     node_type: str                  # search, fetch, synthesize, ...
-    objective: str                  # Node's specific goal
-    dependencies: list[str]         # Upstream node IDs
-    inputs: dict                    # Input parameters
-    expected_outputs: list[str]     # Expected output descriptions
-    assigned_role: str              # Role to execute this node
+    objective: str                  # 节点的具体目标
+    dependencies: list[str]         # 上游节点 ID
+    inputs: dict                    # 输入参数
+    expected_outputs: list[str]     # 预期输出描述
+    assigned_role: str              # 执行此节点的角色
     candidate_capabilities: list[str]
     retry_policy: RetryPolicy
 ```
 
 **ScienceTaskGraph**
 
-The complete execution plan as a DAG.
+作为 DAG 的完整执行计划。
 
 ```python
 class ScienceTaskGraph(BaseModel):
@@ -723,13 +726,13 @@ class ScienceTaskGraph(BaseModel):
     task_id: str
     nodes: list[ScienceTaskNode]
     edges: list[tuple[str, str]]    # (from_node, to_node)
-    root_nodes: list[str]           # Entry points
-    leaf_nodes: list[str]           # Terminal nodes
+    root_nodes: list[str]           # 入口点
+    leaf_nodes: list[str]           # 终止节点
 ```
 
 **Execution**
 
-Record of a node's execution attempt.
+节点执行尝试的记录。
 
 ```python
 class Execution(BaseModel):
@@ -737,30 +740,30 @@ class Execution(BaseModel):
     task_id: str
     node_id: str
     state: ExecutionState           # PENDING, RUNNING, SUCCESS, FAILED
-    output: str | None              # Execution result
-    error: str | None               # Error message if failed
+    output: str | None              # 执行结果
+    error: str | None               # 失败时的错误消息
     started_at: datetime
     completed_at: datetime | None
-    attempts: int                   # Number of retry attempts
-    metadata: dict                  # Execution metadata
+    attempts: int                   # 重试尝试次数
+    metadata: dict                  # 执行元数据
 ```
 
 **Validation**
 
-Validation result for an execution output.
+执行输出的验证结果。
 
 ```python
 class Validation(BaseModel):
     validation_id: str
     execution_id: str
     status: ValidationStatus        # PASSED, PARTIAL, FAILED
-    checks: list[ValidationCheck]   # Individual check results
+    checks: list[ValidationCheck]   # 单个检查结果
     confidence: float               # 0.0 - 1.0
     next_action: str                # DELIVER, REVISE, ABORT
-    feedback: str | None            # Human-readable feedback
+    feedback: str | None            # 人类可读的反馈
 ```
 
-### Supporting Models
+### 支持模型
 
 **Constraints**
 
@@ -801,16 +804,16 @@ class Budget(BaseModel):
 class RetryPolicy(BaseModel):
     max_retries: int = 2
     backoff_seconds: float = 1.0
-    retry_on: list[str]             # Error types to retry
+    retry_on: list[str]             # 要重试的错误类型
 ```
 
 ---
 
-## Operations
+## 运维
 
-### Configuration
+### 配置
 
-User config (`~/.aeloon/config.toml`):
+用户配置 (`~/.aeloon/config.toml`)：
 
 ```toml
 [plugins.aeloon_science]
@@ -823,108 +826,108 @@ max_budget_tokens = 10000
 audit_enabled = true
 ```
 
-### Storage Location
+### 存储位置
 
 ```
 ~/.aeloon/plugin_storage/aeloon.science/
-├── tasks.jsonl         # Task records
-├── executions.jsonl    # Execution records
-├── validations.jsonl   # Validation records
-└── artifacts/          # Per-task artifacts
+├── tasks.jsonl         # 任务记录
+├── executions.jsonl    # 执行记录
+├── validations.jsonl   # 验证记录
+└── artifacts/          # 每任务产物
     ├── {task_id}/
     │   ├── output.md
     │   └── intermediate/
     └── ...
 ```
 
-### Common Operations
+### 常用操作
 
-**Check plugin status:**
+**检查插件状态：**
 
 ```bash
 aeloon plugins list
 ```
 
-**View recent tasks:**
+**查看最近任务：**
 
 ```text
 /sr history
 ```
 
-**Check current task status:**
+**检查当前任务状态：**
 
 ```text
 /sr status
 ```
 
-**Clean old records (manual):**
+**清理旧记录（手动）：**
 
 ```bash
-# Remove tasks older than 30 days
+# 删除 30 天前的任务
 find ~/.aeloon/plugin_storage/aeloon.science/artifacts -type d -mtime +30 -exec rm -rf {} +
 ```
 
 ---
 
-## Extension Guide
+## 扩展指南
 
-### Adding a New Planner
+### 添加新的 Planner
 
-1. Inherit from `Planner` base class
-2. Implement `plan(task: Task) -> ScienceTaskGraph`
-3. Register in pipeline
+1. 继承 `Planner` 基类
+2. 实现 `plan(task: Task) -> ScienceTaskGraph`
+3. 在 pipeline 中注册
 
 ```python
 from aeloon.plugins.ScienceResearch.planner import Planner
 
 class MyPlanner(Planner):
     def plan(self, task: Task) -> ScienceTaskGraph:
-        # Your planning logic
+        # 你的计划逻辑
         return ScienceTaskGraph(...)
 ```
 
-### Adding a New Orchestrator
+### 添加新的 Orchestrator
 
-1. Inherit from `Orchestrator` base class
-2. Implement `run(task, graph, on_progress) -> list[Execution]`
+1. 继承 `Orchestrator` 基类
+2. 实现 `run(task, graph, on_progress) -> list[Execution]`
 
 ```python
 from aeloon.plugins.ScienceResearch.orchestrator import Orchestrator
 
 class MyOrchestrator(Orchestrator):
     async def run(self, task, graph, on_progress=None):
-        # Your execution logic
+        # 你的执行逻辑
         return executions
 ```
 
-### Adding a New Validator
+### 添加新的 Validator
 
-1. Inherit from `Validator` base class
-2. Implement `validate(execution, deliverables, **kwargs) -> Validation`
+1. 继承 `Validator` 基类
+2. 实现 `validate(execution, deliverables, **kwargs) -> Validation`
 
 ```python
 from aeloon.plugins.ScienceResearch.validator import Validator
 
 class MyValidator(Validator):
     def validate(self, execution, deliverables, **kwargs):
-        # Your validation logic
+        # 你的验证逻辑
         return Validation(...)
 ```
 
-### Adding Middleware
+### 添加中间件
 
 ```python
 from aeloon.agent.middleware import BaseAgentMiddleware
 
 class MyMiddleware(BaseAgentMiddleware):
     async def __call__(self, context, next_fn):
-        # Pre-processing
+        # 预处理
         result = await next_fn(context)
-        # Post-processing
+        # 后处理
         return result
 ```
 
-Register in `plugin.py`:
+在 `plugin.py` 中注册：
 
 ```python
 def register(self, api: PluginAPI) -> None:
@@ -933,55 +936,55 @@ def register(self, api: PluginAPI) -> None:
 
 ---
 
-## API Reference
+## API 参考
 
 ### SciencePlugin
 
-| Method | Required | Description |
-|--------|----------|-------------|
-| `register(api)` | Yes | Sync. Register commands, CLI, config schema |
-| `activate(api)` | No | Async. Initialize storage |
-| `deactivate()` | No | Async. Cleanup |
+| 方法 | 必需 | 说明 |
+|------|------|------|
+| `register(api)` | 是 | 同步。注册命令、CLI、配置模式 |
+| `activate(api)` | 否 | 异步。初始化存储 |
+| `deactivate()` | 否 | 异步。清理 |
 
 ### SciencePipeline
 
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `run(query, on_progress, session_id)` | `(str, Task)` | Execute a science task |
-| `get_status()` | `str` | Get current task status |
-| `get_history()` | `str` | Get task history |
+| 方法 | 返回 | 说明 |
+|------|------|------|
+| `run(query, on_progress, session_id)` | `(str, Task)` | 执行科学任务 |
+| `get_status()` | `str` | 获取当前任务状态 |
+| `get_history()` | `str` | 获取任务历史 |
 
 ### Planner
 
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `plan(task)` | `ScienceTaskGraph` | Convert task to executable graph |
+| 方法 | 返回 | 说明 |
+|------|------|------|
+| `plan(task)` | `ScienceTaskGraph` | 将任务转换为可执行图 |
 
 ### Orchestrator
 
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `run(task, graph, on_progress)` | `list[Execution]` | Execute the graph |
+| 方法 | 返回 | 说明 |
+|------|------|------|
+| `run(task, graph, on_progress)` | `list[Execution]` | 执行图 |
 
 ### Validator
 
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `validate(execution, deliverables, **kwargs)` | `Validation` | Validate execution output |
+| 方法 | 返回 | 说明 |
+|------|------|------|
+| `validate(execution, deliverables, **kwargs)` | `Validation` | 验证执行输出 |
 
 ### JsonlStorage
 
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `save_task(task)` | `None` | Persist task |
-| `save_execution(execution)` | `None` | Persist execution |
-| `list_tasks()` | `list[Task]` | List all tasks |
-| `get_task(task_id)` | `Task \| None` | Get specific task |
+| 方法 | 返回 | 说明 |
+|------|------|------|
+| `save_task(task)` | `None` | 持久化任务 |
+| `save_execution(execution)` | `None` | 持久化执行 |
+| `list_tasks()` | `list[Task]` | 列出所有任务 |
+| `get_task(task_id)` | `Task \| None` | 获取特定任务 |
 
 ---
 
-## Resources
+## 资源
 
-- Plugin source: `aeloon/plugins/ScienceResearch/`
-- Tests: `tests/test_*.py`
-- General Plugin SDK Guide: `aeloon/plugins/README.md`
+- 插件源码：`aeloon/plugins/ScienceResearch/`
+- 测试：`tests/test_*.py`
+- 通用插件 SDK 指南：`aeloon/plugins/README.md`

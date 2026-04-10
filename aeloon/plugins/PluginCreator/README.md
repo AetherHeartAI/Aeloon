@@ -1,5 +1,5 @@
 <p align="right">
-<a href="./README.md">English</a> | <b>中文</b>
+<b>English</b> | <a href="./README-PC.md">中文</a>
 </p>
 
 # PluginCreator Plugin Development Guide

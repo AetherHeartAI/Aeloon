@@ -1,284 +1,282 @@
 <p align="right">
-<a href="./README.en.md">English</a> | <b>中文</b>
+<b>English</b> | <a href="./README.cn.md">中文</a>
 </p>
 
-# Aeloon 插件开发指南
+# Aeloon Plugin Development Guide
 
-Aeloon 插件开发完整指南 —— 从概念到 API 参考。
+Complete guide for Aeloon plugin development — from concepts to API reference.
 
-## 目录
+## Table of Contents
 
-1. [概述](#概述)
-2. [快速开始](#快速开始)
-3. [插件架构](#插件架构)
-4. [核心概念](#核心概念)
-5. [API 参考](#api-参考)
-6. [插件专属指南](#插件专属指南)
-
----
-
-## 概述
-
-### 插件是什么
-
-Aeloon 插件是扩展 Aeloon 核心能力的**模块化组件**，让你能够：
-
-- **添加自定义命令**：如 `/mycommand` 响应用户请求
-- **注册 Agent 工具**：供 LLM 调用的功能函数
-- **启动后台服务**：定时轮询、数据同步等长期任务
-- **拦截消息流**：审计、预算控制、风险门控等
-- **自定义配置存储**：独立的配置命名空间和存储目录
-
-插件是**增量扩展**——复用 Aeloon 的 Agent Runtime、消息总线、配置系统，同时保持模块隔离。
-
-### Plugin SDK 支持
-
-| 能力 | 说明 |
-|------|------|
-| 生命周期管理 | 自动发现 → 验证 → 加载 → 注册 → 激活 → 停用 |
-| 统一注册机制 | 通过 `PluginAPI` 注册命令、工具、服务、中间件、配置 |
-| 运行时访问 | LLM 调用、Agent 执行、存储目录、配置值 |
-| 事件订阅 | 监听 AGENT_START、MESSAGE_RECEIVED 等事件 |
-| 状态栏贡献 | 向底部状态栏添加状态信息 |
-| 隔离性保证 | 插件间配置、存储、日志独立 |
-
-### 开发范式
-
-创建插件的五步范式：
-
-1. **继承 Plugin 基类**
-2. **实现 register(api)** —— 声明命令、工具、配置等
-3. **实现生命周期方法** —— `activate()` 启动服务，`deactivate()` 清理资源
-4. **编写业务处理函数** —— 处理命令逻辑
-5. **创建清单文件** —— `aeloon.plugin.json` 声明插件元数据
-
-**插件类型**：
-- **Task Plugin**（命令 + 中间件）：适合请求-响应式工作流，如 `/sr`、`/se`
-- **Hybrid Plugin**（命令 + 工具 + 服务）：适合长期运行代理，如市场监控
+1. [Overview](#overview)
+2. [Quick Start](#quick-start)
+3. [Plugin Architecture](#plugin-architecture)
+4. [Core Concepts](#core-concepts)
+5. [API Reference](#api-reference)
+6. [Plugin-Specific Guides](#plugin-specific-guides)
 
 ---
 
-## 快速开始
+## Overview
 
-### 最小插件结构
+### What is a Plugin
+
+Aeloon plugins are **modular components** that extend Aeloon's core capabilities, allowing you to:
+
+- **Add custom commands**: Such as `/mycommand` to respond to user requests
+- **Register Agent tools**: Functional functions for LLM to call
+- **Start background services**: Long-running tasks like scheduled polling and data synchronization
+- **Intercept message flow**: Auditing, budget control, risk gating, etc.
+- **Custom configuration storage**: Independent configuration namespace and storage directory
+
+Plugins are **incremental extensions** — they reuse Aeloon's Agent Runtime, message bus, and configuration system while maintaining module isolation.
+
+### Plugin SDK Support
+
+| Capability | Description |
+|------------|-------------|
+| Lifecycle Management | Auto-discovery → validation → loading → registration → activation → deactivation |
+| Unified Registration | Register commands, tools, services, middleware, and configuration via `PluginAPI` |
+| Runtime Access | LLM invocation, Agent execution, storage directory, configuration values |
+| Event Subscription | Listen to events like AGENT_START, MESSAGE_RECEIVED, etc. |
+| Status Bar Contribution | Add status information to the bottom status bar |
+| Isolation Guarantee | Independent configuration, storage, and logging between plugins |
+
+### Development Paradigm
+
+Five-step paradigm for creating plugins:
+
+1. **Inherit from Plugin base class**
+2. **Implement register(api)** — Declare commands, tools, configuration, etc.
+3. **Implement lifecycle methods** — `activate()` to start services, `deactivate()` to clean up resources
+4. **Write business processing functions** — Handle command logic
+5. **Create manifest file** — `aeloon.plugin.json` to declare plugin metadata
+
+**Plugin Types**:
+- **Task Plugin** (commands + middleware): Suitable for request-response workflows, such as `/sr`, `/wiki`
+- **Hybrid Plugin** (commands + tools + services): Suitable for long-running agents, such as market monitoring
+
+---
+
+## Quick Start
+
+### Minimal Plugin Structure
 
 ```
 my_plugin/
-├── aeloon.plugin.json    # 清单文件
+├── aeloon.plugin.json    # Manifest file
 ├── __init__.py
-└── plugin.py             # 插件类
+└── plugin.py             # Plugin class
 ```
 
-**清单文件** (`aeloon.plugin.json`)：
-- `id`: 反向 DNS 标识符，必须包含 `.`
-- `name`: 可读名称
-- `version`: 语义化版本
-- `entry`: `模块:类名` 格式
-- `provides`: 提供的命令、工具等
-- `requires`: 依赖的 Aeloon 版本、其他插件等
+**Manifest File** (`aeloon.plugin.json`):
+- `id`: Reverse DNS identifier, must contain `.`
+- `name`: Human-readable name
+- `version`: Semantic version
+- `entry`: Format as `module:ClassName`
+- `provides`: Commands, tools, etc. provided by the plugin
+- `requires`: Dependencies on Aeloon version, other plugins, etc.
 
-**安装测试**：将插件复制到 `~/.aeloon/plugins/`，重启 Aeloon 即可使用。
+**Installation Test**: Copy the plugin to `~/.aeloon/plugins/`, restart Aeloon to use it.
 
 ---
 
-## 插件架构
+## Plugin Architecture
 
-### 架构分层
+### Architecture Layers
 
 ```
 ┌─────────────────────────────────────────┐
-│ 插件层 (Plugin Layer)                    │
-│  - Task Plugin: 命令 + 中间件            │
-│  - Hybrid Plugin: 命令 + 工具 + 服务     │
+│ Plugin Layer                            │
+│  - Task Plugin: Commands + Middleware   │
+│  - Hybrid Plugin: Commands + Tools + Services │
 ├─────────────────────────────────────────┤
-│ SDK 层                                  │
-│  - Plugin 基类、PluginAPI 接口           │
-│  - 生命周期管理、注册机制                │
+│ SDK Layer                               │
+│  - Plugin base class, PluginAPI interface │
+│  - Lifecycle management, registration mechanism │
 ├─────────────────────────────────────────┤
-│ 运行时层 (Runtime Layer)                 │
-│  - AgentLoop、MessageBus                │
-│  - LLM 访问、工具执行                    │
+│ Runtime Layer                           │
+│  - AgentLoop, MessageBus                │
+│  - LLM access, tool execution           │
 ├─────────────────────────────────────────┤
-│ 核心层 (Core Layer)                      │
-│  - 配置系统、存储系统、渠道集成          │
+│ Core Layer                              │
+│  - Configuration system, storage system, channel integration │
 └─────────────────────────────────────────┘
 ```
 
-![Plugin SDK System Architecture](../../assets/fig1_plugin_sdk_system_architecture.svg)
+![Plugin SDK System Architecture](../../assets/fig2_plugin_sdk_system_architecture.svg)
 
-### 生命周期
+### Lifecycle
 
 ```
-发现 → 验证 → 注册 → 提交 → 激活 → [运行中] → 停用
+Discovery → Validation → Registration → Commit → Activation → [Running] → Deactivation
 ```
 
-| 阶段 | 方法 | 说明 |
-|------|------|------|
-| 注册 | `register(api)` | 同步。声明命令、工具、服务 |
-| 提交 | `api._commit()` | 原子写入注册表 |
-| 激活 | `activate(api)` | 异步。启动服务、初始化状态（30秒超时） |
-| 停用 | `deactivate()` | 异步。清理资源（30秒超时） |
+| Phase | Method | Description |
+|-------|--------|-------------|
+| Registration | `register(api)` | Synchronous. Declare commands, tools, services |
+| Commit | `api._commit()` | Atomic write to registry |
+| Activation | `activate(api)` | Asynchronous. Start services, initialize state (30s timeout) |
+| Deactivation | `deactivate()` | Asynchronous. Clean up resources (30s timeout) |
 
-### 发现来源
+### Discovery Sources
 
-| 来源 | 优先级 | 位置 |
-|------|--------|------|
-| 内置 | 10 | `aeloon/plugins/` |
-| Entry Points | 20 | `aeloon.plugins` setuptools 组 |
-| 工作区 | 30 | `~/.aeloon/plugins/` |
+| Source | Priority | Location |
+|--------|----------|----------|
+| Built-in | 10 | `aeloon/plugins/` |
+| Entry Points | 20 | `aeloon.plugins` setuptools group |
+| Workspace | 30 | `~/.aeloon/plugins/` |
 
 ---
 
-## 核心概念
+## Core Concepts
 
-### 命令 (Commands)
+### Commands
 
-Slash 命令是用户与插件交互的主要方式。
+Slash commands are the primary way users interact with plugins.
 
-**注册参数**：
-- `name`: 命令名称（不含 `/`）
-- `handler`: 处理函数，接收 `CommandContext` 和参数字符串
-- `description`: 命令描述
+**Registration Parameters**:
+- `name`: Command name (without `/`)
+- `handler`: Handler function, receives `CommandContext` and parameter string
+- `description`: Command description
 
-**子命令路由模式**：通过空格分割参数，第一个词作为子命令，其余作为参数。
+**Subcommand Routing Pattern**: Split parameters by space, first word as subcommand, rest as parameters.
 
-### 工具 (Tools)
+### Tools
 
-工具是 LLM 可调用的函数。需定义：
-- `name`: 工具标识
-- `description`: 功能描述
-- `parameters`: JSON Schema 参数定义
-- `execute(**kwargs)`: 执行逻辑
+Tools are functions callable by LLM. Need to define:
+- `name`: Tool identifier
+- `description`: Function description
+- `parameters`: JSON Schema parameter definition
+- `execute(**kwargs)`: Execution logic
 
-### 服务 (Services)
+### Services
 
-后台服务用于长期运行的任务，需实现：
-- `start(runtime, config)`: 启动服务
-- `stop()`: 停止服务
-- `health_check()`: （可选）返回健康状态
+Background services are used for long-running tasks, need to implement:
+- `start(runtime, config)`: Start service
+- `stop()`: Stop service
+- `health_check()`: (Optional) Return health status
 
-**服务策略** (`ServicePolicy`)：
-- `restart_policy`: 重启策略（never/on-failure/always）
-- `max_restarts`: 最大重启次数
-- `restart_delay_seconds`: 重启间隔
-- `startup_timeout_seconds`: 启动超时
-- `shutdown_timeout_seconds`: 关闭超时
+**Service Policy** (`ServicePolicy`):
+- `restart_policy`: Restart policy (never/on-failure/always)
+- `max_restarts`: Maximum number of restarts
+- `restart_delay_seconds`: Restart interval
+- `startup_timeout_seconds`: Startup timeout
+- `shutdown_timeout_seconds`: Shutdown timeout
 
 ### Hooks & Middleware
 
-**Hooks**：响应生命周期事件，不耦合核心内部。
+**Hooks**: Respond to lifecycle events without coupling to core internals.
 
-Hook 类型：
-- `NOTIFY`: 触发即忘，错误记录但不传播
-- `MUTATE`: 链式处理，每个处理器转换值
-- `REDUCE`: 收集，所有返回值汇总为列表
-- `GUARD`: 允许/拒绝/修改，首个拒绝生效
+Hook Types:
+- `NOTIFY`: Fire-and-forget, errors are logged but not propagated
+- `MUTATE`: Chain processing, each handler transforms the value
+- `REDUCE`: Collection, all return values aggregated as list
+- `GUARD`: Allow/reject/modify, first rejection takes effect
 
-常用事件：AGENT_START、MESSAGE_RECEIVED、BEFORE_TOOL_CALL 等。
+Common events: AGENT_START, MESSAGE_RECEIVED, BEFORE_TOOL_CALL, etc.
 
-**Middleware**：包装每个 LLM turn 进行前置/后置处理，如审计日志、预算控制。
+**Middleware**: Wrap each LLM turn for pre/post processing, such as audit logging, budget control.
 
-### 配置与存储
+### Configuration & Storage
 
-**配置**：使用 Pydantic BaseModel 定义配置模型，通过 `api.register_config_schema()` 注册。用户配置位于 `~/.aeloon/config.toml`。
+**Configuration**: Use Pydantic BaseModel to define configuration model, register via `api.register_config_schema()`. User configuration is located at `~/.aeloon/config.toml`.
 
-**存储**：插件拥有独立存储目录 `~/.aeloon/plugin_storage/{plugin_id}/`，通过 `api.runtime.storage_path` 访问。
+**Storage**: Plugins have independent storage directories at `~/.aeloon/plugin_storage/{plugin_id}/`, accessed via `api.runtime.storage_path`.
 
-**LLM 访问**：通过 `api.runtime.llm` 访问，支持普通对话、结构化输出、完整 Agent 流水线。
+**LLM Access**: Accessed via `api.runtime.llm`, supports regular chat, structured output, and full Agent pipeline.
 
-### 状态栏
+### Status Bar
 
-插件可向底部状态栏贡献状态片段，需同步返回 `StatusSegment` 列表。
+Plugins can contribute status segments to the bottom status bar, need to synchronously return a list of `StatusSegment`.
 
 ---
 
-## API 参考
+## API Reference
 
-### Plugin (抽象基类)
+### Plugin (Abstract Base Class)
 
-| 方法 | 必需 | 说明 |
-|------|------|------|
-| `register(api)` | 是 | 同步。注册命令、工具、服务 |
-| `activate(api)` | 否 | 异步。启动服务（30秒超时） |
-| `deactivate()` | 否 | 异步。清理（30秒超时） |
-| `health_check()` | 否 | 返回健康状态字典 |
+| Method | Required | Description |
+|--------|----------|-------------|
+| `register(api)` | Yes | Synchronous. Register commands, tools, services |
+| `activate(api)` | No | Asynchronous. Start services (30s timeout) |
+| `deactivate()` | No | Asynchronous. Clean up (30s timeout) |
+| `health_check()` | No | Return health status dictionary |
 
 ### PluginAPI
 
-**属性**：
-- `id`: 插件 ID
-- `version`: 版本
-- `config`: 配置字典
-- `runtime`: 运行时访问
+**Properties**:
+- `id`: Plugin ID
+- `version`: Version
+- `config`: Configuration dictionary
+- `runtime`: Runtime access
 
-**注册方法**：
-- `register_command(name, handler, description)`: 注册命令
-- `register_tool(tool)`: 注册工具
-- `register_service(name, service_cls, policy)`: 注册服务
-- `register_middleware(name, middleware)`: 注册中间件
-- `register_command_middleware(name, middleware)`: 注册命令分发中间件（slash 命令 before/after 钩子）
-- `register_hook(event, handler, kind, priority)`: 注册 Hook
-- `register_cli(name, builder=None, commands=(), handler=None, description="")`: 注册 CLI 子命令组；可选同时注册 slash 命令，并在只提供 `commands` 时自动生成 builder
-- `register_config_schema(schema_cls)`: 注册配置模型
-- `register_status_provider(name, provider, priority)`: 注册状态栏提供者
+**Registration Methods**:
+- `register_command(name, handler, description)`: Register command
+- `register_tool(tool)`: Register tool
+- `register_service(name, service_cls, policy)`: Register service
+- `register_middleware(name, middleware)`: Register middleware
+- `register_hook(event, handler, kind, priority)`: Register Hook
+- `register_cli(name, builder)`: Register CLI subcommand
+- `register_config_schema(schema_cls)`: Register configuration model
+- `register_status_provider(name, provider, priority)`: Register status bar provider
 
-**服务控制**：
-- `start_service(name, config_overrides)`: 启动服务
-- `stop_service(name)`: 停止服务
-- `list_service_status()`: 列出服务状态
+**Service Control**:
+- `start_service(name, config_overrides)`: Start service
+- `stop_service(name)`: Stop service
+- `list_service_status()`: List service status
 
 ### PluginRuntime
 
-**属性**：
-- `agent_loop`: 主 Agent 循环
-- `config`: 插件配置
-- `storage_path`: 存储目录路径
-- `logger`: 命名空间日志器
-- `llm`: LLM 访问代理
+**Properties**:
+- `agent_loop`: Main Agent loop
+- `config`: Plugin configuration
+- `storage_path`: Storage directory path
+- `logger`: Namespaced logger
+- `llm`: LLM access proxy
 
-**方法**：
-- `process_direct(content, **kwargs)`: 委托给 Agent 流水线
+**Methods**:
+- `process_direct(content, **kwargs)`: Delegate to Agent pipeline
 
 ### CommandContext
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `session_key` | `str` | 会话标识 |
-| `channel` | `str` | 渠道名称（cli/telegram 等） |
-| `reply` | `async (str) -> None` | 发送中间回复 |
-| `send_progress` | `async (str, **kwargs) -> None` | 发送进度更新 |
-| `plugin_config` | `Mapping` | 插件专属配置 |
+| Field | Type | Description |
+|-------|------|-------------|
+| `session_key` | `str` | Session identifier |
+| `channel` | `str` | Channel name (cli/telegram, etc.) |
+| `reply` | `async (str) -> None` | Send intermediate reply |
+| `send_progress` | `async (str, **kwargs) -> None` | Send progress update |
+| `plugin_config` | `Mapping` | Plugin-specific configuration |
 
-### PluginManifest (清单模型)
+### PluginManifest (Manifest Model)
 
-| 字段 | 必需 | 说明 |
-|------|------|------|
-| `id` | 是 | 反向 DNS 标识符（必须含 `.`） |
-| `name` | 是 | 可读名称 |
-| `version` | 是 | 语义化版本 |
-| `entry` | 是 | `module:ClassName` 格式 |
-| `description` | 否 | 简短描述 |
-| `author` | 否 | 作者 |
-| `provides` | 否 | 提供的命令、工具、服务等 |
-| `requires` | 否 | 依赖的 Aeloon 版本、插件等 |
-
----
-
-## 插件专属指南
-
-| 插件 | 指南 | 说明 |
-|------|------|------|
-| **ScienceResearch** | [`README-SR.md`](ScienceResearch/README-SR.md) | AI4S 科研任务插件完整指南 |
-| **Wiki** | [`README.md`](Wiki/README.md) | 本地知识库管理插件完整指南 |
-| **ACP Bridge** | [`README.md`](acp_bridge/README.md) | ACP 协议桥接：连接外部智能体服务器 |
-| **PluginCreator** | [`README-PC.md`](PluginCreator/README-PC.md) | 插件开发工作流智能规划器完整指南 |
-
-专属指南包含：架构详解、运行时流程、数据模型、运维配置、扩展模式。
+| Field | Required | Description |
+|-------|----------|-------------|
+| `id` | Yes | Reverse DNS identifier (must contain `.`) |
+| `name` | Yes | Human-readable name |
+| `version` | Yes | Semantic version |
+| `entry` | Yes | Format as `module:ClassName` |
+| `description` | No | Short description |
+| `author` | No | Author |
+| `provides` | No | Commands, tools, services provided |
+| `requires` | No | Dependencies on Aeloon version, plugins, etc. |
 
 ---
 
-## 资源
+## Plugin-Specific Guides
+| Plugin | Guide | Description |
+|--------|-------|-------------|
+| **ScienceResearch** | [`README-SR.md`](ScienceResearch/README-SR.md) | Complete guide for AI4S scientific research task plugin |
+| **Wiki** | [`README.md`](Wiki/README.md) | Complete guide for local knowledge base management plugin |
+| **ACP Bridge** | [`README.md`](acp_bridge/README.md) | ACP protocol bridge: connect to external agent servers |
+| **PluginCreator** | [`README-PC.md`](PluginCreator/README-PC.md) | Complete guide for plugin development workflow planner |
 
-- **SDK 源码**：`aeloon/plugins/_sdk/`
-- **内置示例**：`ScienceResearch/`、`SoftwareEngineering/`、`market/`、`fs/`
-- **测试**：`tests/test_plugin_sdk.py`
+Specific guides include: detailed architecture, runtime flow, data models, operational configuration, and extension patterns.
+
+---
+
+## Resources
+
+- **SDK Source Code**: `aeloon/plugins/_sdk/`
+- **Built-in Examples**: `ScienceResearch/`, `market/`, `fs/`
+- **Tests**: `tests/test_plugin_sdk.py`

@@ -154,7 +154,7 @@ Selection priority: explicit name → model keyword match → API key prefix →
 Plugins are modular components that extend Aeloon's core: custom slash commands, agent tools, background services, message middleware, status bar contributions, and isolated config/storage namespaces.
 
 **Plugin types**:
-- **Task Plugin** (commands + middleware) — request-response workflows, e.g. `/sr`, `/se`
+- **Task Plugin** (commands + middleware) — request-response workflows, e.g. `/sr`, `/wiki`
 - **Hybrid Plugin** (commands + tools + services) — long-running agents, e.g. market monitoring
 - **Service / Status Plugin** (services or status bar contributions) — service-style extensions or CLI status bar contributions, e.g. `StatusPannel`
 
