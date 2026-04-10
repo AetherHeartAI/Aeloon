@@ -12,8 +12,6 @@ from typing import TYPE_CHECKING, Any
 from aeloon.plugins._sdk.base import Plugin
 from aeloon.plugins._sdk.types import ServicePolicy
 
-from .cli import acp_cli_specs
-
 if TYPE_CHECKING:
     from aeloon.plugins._sdk.api import PluginAPI
 
@@ -66,12 +64,7 @@ class ACPBridgePlugin(Plugin):
 
         # Command
         handler = make_command_handler(self._service)
-        api.register_cli(
-            "acp",
-            commands=acp_cli_specs("acp"),
-            handler=handler,
-            description="ACP bridge commands",
-        )
+        api.register_command("acp", handler, description="ACP bridge commands")
 
         # Service registration
         api.register_service(

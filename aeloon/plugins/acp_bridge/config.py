@@ -31,7 +31,6 @@ def load_acp_config() -> dict[str, Any]:
             except (json.JSONDecodeError, IOError) as e:
                 # Log warning but continue to fallback
                 import logging
-
                 logging.getLogger(__name__).warning(
                     f"Failed to load ACP config from {config_path}: {e}"
                 )

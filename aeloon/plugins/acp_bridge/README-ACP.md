@@ -1,66 +1,66 @@
 <p align="right">
-<b>English</b> | <a href="./README-ACP.md">中文</a>
+<a href="./README.md">English</a> | <b>中文</b>
 </p>
 
-# ACP Bridge Plugin
+# ACP Bridge 插件
 
-Agent Client Protocol (ACP) bridge plugin — connecting Aeloon with external ACP agent servers.
+Agent Client Protocol (ACP) 桥接插件 —— 连接 Aeloon 与外部 ACP 智能体服务器。
 
-## Table of Contents
+## 目录
 
-1. [What is ACP](#what-is-acp)
-2. [Features](#features)
-3. [Installation and Configuration](#installation-and-configuration)
-4. [Command Reference](#command-reference)
-5. [Connecting to Other Agent Servers](#connecting-to-other-agent-servers)
-6. [Security Configuration](#security-configuration)
-7. [Architecture Design](#architecture-design)
+1. [什么是 ACP](#什么是-acp)
+2. [功能特性](#功能特性)
+3. [安装与配置](#安装与配置)
+4. [命令参考](#命令参考)
+5. [连接其他智能体服务器](#连接其他智能体服务器)
+6. [安全配置](#安全配置)
+7. [架构设计](#架构设计)
 
 ---
 
-## What is ACP
+## 什么是 ACP
 
-**Agent Client Protocol (ACP)** is a standardized agent communication protocol that allows different AI assistants and agent systems to collaborate. The ACP Bridge plugin enables Aeloon to:
+**Agent Client Protocol (ACP)** 是一种标准化的智能体通信协议，允许不同的 AI 助手和智能体系统相互协作。ACP Bridge 插件让 Aeloon 能够：
 
-- **Connect to external agents**: such as Claude Code, other ACP-compatible agents
-- **Delegate tasks**: send specific tasks to specialized agents for processing
-- **Receive results**: obtain execution results from external agents and integrate them into conversations
-- **Real-time streaming output**: view the execution progress of external agents
+- **连接外部智能体**：如 Claude Code、其他 ACP 兼容的智能体
+- **委派任务**：将特定任务发送给专门的智能体处理
+- **接收结果**：获取外部智能体的执行结果并整合到对话中
+- **实时流式输出**：查看外部智能体的执行进度
 
-### Workflow
+### 工作流程
 
 ```
-User → Aeloon → ACP Bridge → ACP Agent Server
+用户 → Aeloon → ACP Bridge → ACP 智能体服务器
                 ↑                    ↓
-         Receive streaming updates ← Execute task → Return results
+         接收流式更新 ← 执行任务 → 返回结果
 ```
 
 ---
 
-## Features
+## 功能特性
 
-| Feature | Description |
-|---------|-------------|
-| **Multiple Profiles** | Support for configuring multiple ACP backends for quick switching |
-| **stdio Transport** | Communicate with subprocess agents via standard input/output |
-| **Permission Control** | Fine-grained file read/write and shell execution permission management |
-| **Real-time Streaming** | View execution progress and output of external agents in real-time |
-| **Auto Reconnect** | Automatic retry on connection failure (configurable strategy) |
-| **Status Monitoring** | Status bar showing connection status and active session count |
+| 特性 | 说明 |
+|------|------|
+| **多配置文件** | 支持配置多个 ACP 后端，快速切换 |
+| **stdio 传输** | 通过标准输入输出与子进程智能体通信 |
+| **权限控制** | 细粒度的文件读写、Shell 执行权限管理 |
+| **实时流式** | 实时查看外部智能体的执行进度和输出 |
+| **自动重连** | 连接失败时自动重试（可配置策略） |
+| **状态监控** | 状态栏显示连接状态和活跃会话数 |
 
 ---
 
-## Installation and Configuration
+## 安装与配置
 
-### 1. Install ACP Python SDK
+### 1. 安装 ACP Python SDK
 
 ```bash
 pip install agent-client-protocol
 ```
 
-### 2. Enable Plugin
+### 2. 启用插件
 
-Add to `~/.aeloon/acp.json`:
+在 `~/.aeloon/acp.json` 中添加：
 
 ```json
 {
@@ -90,15 +90,15 @@ Add to `~/.aeloon/acp.json`:
 }
 ```
 
-### 3. Configure Environment Variables
+### 3. 配置环境变量
 
-If using Claude Code, you need to set the API Key:
+如果使用 Claude Code，需要设置 API Key：
 
 ```bash
 export ANTHROPIC_API_KEY=your_api_key_here
 ```
 
-Or log in using Claude CLI:
+或使用 Claude CLI 登录：
 
 ```bash
 claude login
@@ -106,27 +106,27 @@ claude login
 
 ---
 
-## Command Reference
+## 命令参考
 
 ### `/acp connect [profile]`
 
-Connect to the specified ACP backend profile.
+连接到指定的 ACP 后端配置文件。
 
 ```
-/acp connect              # Use default profile (claude_code)
-/acp connect claude_code  # Explicitly specify profile
-/acp connect my_agent     # Connect to custom agent
+/acp connect              # 使用默认配置（claude_code）
+/acp connect claude_code  # 显式指定配置
+/acp connect my_agent     # 连接到自定义智能体
 ```
 
 ### `/acp list`
 
-List currently available ACP backend configurations, marking the default profile.
+列出当前可用的 ACP 后端配置，并标记默认配置。
 
 ```
 /acp list
 ```
 
-Example output:
+输出示例：
 ```
 Available ACP backends:
 - claude_code — npx @agentclientprotocol/claude-agent-acp
@@ -135,16 +135,16 @@ Available ACP backends:
 
 ### `/acp chat <message>`
 
-Send a message to the connected ACP agent.
+向已连接的 ACP 智能体发送消息。
 
 ```
-/acp chat Please help me analyze the code structure of this project
-/acp chat Run tests and generate a report
+/acp chat 请帮我分析这个项目的代码结构
+/acp chat 运行测试并生成报告
 ```
 
 ### `/acp disconnect`
 
-Disconnect the current ACP connection.
+断开当前 ACP 连接。
 
 ```
 /acp disconnect
@@ -152,13 +152,13 @@ Disconnect the current ACP connection.
 
 ### `/acp status`
 
-View connection status and statistics.
+查看连接状态和统计信息。
 
 ```
 /acp status
 ```
 
-Example output:
+输出示例：
 ```
 State: connected
 Profile: claude_code
@@ -167,27 +167,27 @@ Sessions: 2
 
 ### `/acp help`
 
-Display help information.
+显示帮助信息。
 
 ---
 
-## Connecting to Other Agent Servers
+## 连接其他智能体服务器
 
-The ACP Bridge is not limited to connecting to Claude Code; it can connect to any agent server that implements the ACP protocol.
+ACP Bridge 不仅限于连接 Claude Code，可以连接任何实现 ACP 协议的智能体服务器。
 
-### Configuration Example: Kimi CLI (Recommended)
+### 配置示例：Kimi CLI（推荐）
 
-**Kimi CLI** is a command-line agent tool developed by Moonshot AI with native ACP protocol support:
+**Kimi CLI** 是 Moonshot AI 自研的命令行智能体工具，原生支持 ACP 协议：
 
 ```bash
-# Install Kimi CLI
+# 安装 Kimi CLI
 uv tool install kimi-cli
 
-# Set API Key
+# 设置 API Key
 export MOONSHOT_API_KEY="your_api_key"
 ```
 
-Add Kimi CLI configuration to the configuration file:
+配置文件中添加 Kimi CLI 配置：
 
 ```json
 {
@@ -208,22 +208,22 @@ Add Kimi CLI configuration to the configuration file:
 }
 ```
 
-**Features**:
-- Native ACP support, no wrapper scripts needed
-- Supports 256K long context
-- Supports MCP tool extensions
-- Supports Shell mode (Ctrl+K)
+**特点**：
+- 原生 ACP 支持，无需包装脚本
+- 支持 256K 长上下文
+- 支持 MCP 工具扩展
+- 支持 Shell 模式 (Ctrl+K)
 
-**Connection Usage**:
+**连接使用**：
 ```
 /acp list
 /acp connect kimi_cli
-/acp chat Analyze the code structure of this project
+/acp chat 分析这个项目的代码结构
 ```
 
-### Configuration Example: OpenAI Codex CLI
+### 配置示例：OpenAI Codex CLI
 
-**Note**: The official OpenAI Codex CLI version does not currently support native ACP protocol. It is currently recommended to use Claude Agent ACP:
+**注意**：OpenAI Codex CLI 官方版本暂不支持原生 ACP 协议。目前推荐使用 Claude Agent ACP：
 
 ```json
 {
@@ -244,11 +244,11 @@ Add Kimi CLI configuration to the configuration file:
 }
 ```
 
-**Note**: OpenAI has announced that ACP support will be added in a future version of Codex CLI, at which point you can use `codex --acp` directly.
+**说明**：OpenAI 已宣布将在未来版本为 Codex CLI 添加 ACP 支持，届时可直接使用 `codex --acp` 启动。
 
-### Configuration Example: Custom ACP Agent
+### 配置示例：自定义 ACP 智能体
 
-Suppose you have a custom ACP agent server script:
+假设你有一个自定义的 ACP 智能体服务器脚本：
 
 ```json
 {
@@ -270,9 +270,9 @@ Suppose you have a custom ACP agent server script:
 }
 ```
 
-### Configuration Example: Docker Container Agent
+### 配置示例：Docker 容器中的智能体
 
-Connect to an ACP agent running in a Docker container:
+连接运行在 Docker 容器中的 ACP 智能体：
 
 ```json
 {
@@ -296,9 +296,9 @@ Connect to an ACP agent running in a Docker container:
 }
 ```
 
-### Configuration Example: Remote SSH Agent
+### 配置示例：远程 SSH 智能体
 
-Connect to an ACP agent on a remote server via SSH:
+通过 SSH 连接远程服务器上的 ACP 智能体：
 
 ```json
 {
@@ -320,9 +320,9 @@ Connect to an ACP agent on a remote server via SSH:
 }
 ```
 
-### Configuration Example: Node.js ACP Agent
+### 配置示例：Node.js ACP 智能体
 
-Connect to an ACP agent implemented using Node.js:
+连接使用 Node.js 实现的 ACP 智能体：
 
 ```json
 {
@@ -344,26 +344,26 @@ Connect to an ACP agent implemented using Node.js:
 }
 ```
 
-### Quick Profile Switching
+### 快速切换配置文件
 
 ```
-# Connect to Claude Code
+# 连接 Claude Code
 /acp connect claude_code
 
-# Switch to custom agent
+# 切换到自定义智能体
 /acp connect my_custom_agent
 
-# Switch to remote server agent
+# 切换到远程服务器智能体
 /acp connect remote_server
 ```
 
 ---
 
-## Security Configuration
+## 安全配置
 
-### Permission Policy
+### 权限策略
 
-Set permission policies in the configuration to control ACP agent capabilities:
+在配置中设置权限策略，控制 ACP 智能体的能力：
 
 ```json
 {
@@ -376,16 +376,16 @@ Set permission policies in the configuration to control ACP agent capabilities:
 }
 ```
 
-| Permission | Description | Recommendation |
-|------------|-------------|----------------|
-| `autoApproveSafeRequests` | Automatically approve "safe" requests | Recommended to disable in production |
-| `allowFileRead` | Allow file reading | Enable as needed |
-| `allowFileWrite` | Allow file writing | Enable with caution |
-| `allowShell` | Allow shell command execution | High security risk |
+| 权限 | 说明 | 建议 |
+|------|------|------|
+| `autoApproveSafeRequests` | 自动批准"安全"请求 | 生产环境建议关闭 |
+| `allowFileRead` | 允许读取文件 | 按需开启 |
+| `allowFileWrite` | 允许写入文件 | 谨慎开启 |
+| `allowShell` | 允许执行 Shell 命令 | 高安全风险 |
 
-### Environment Variable Isolation
+### 环境变量隔离
 
-Each profile can set independent environment variables to achieve credential isolation for different agents:
+每个配置文件可以设置独立的环境变量，实现不同智能体的凭据隔离：
 
 ```json
 {
@@ -402,13 +402,13 @@ Each profile can set independent environment variables to achieve credential iso
 
 ---
 
-## Architecture Design
+## 架构设计
 
-### Component Architecture
+### 组件架构
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     ACP Bridge Plugin                        │
+│                     ACP Bridge 插件                          │
 ├─────────────────────────────────────────────────────────────┤
 │  Commands          │  Service              │  Config        │
 │  ─────────         │  ───────              │  ───────       │
@@ -417,72 +417,72 @@ Each profile can set independent environment variables to achieve credential iso
 │  /acp disconnect   │  ├─ Session Manager   │                │
 │  /acp status       │  └─ Health Monitor    │                │
 ├─────────────────────────────────────────────────────────────┤
-│                     ACP Protocol Layer                       │
+│                     ACP 协议层                               │
 ├─────────────────────────────────────────────────────────────┤
 │  stdio Transport   │  Handshake   │  Session Management     │
 └─────────────────────────────────────────────────────────────┘
                           ↓
 ┌─────────────────────────────────────────────────────────────┐
-│              External ACP Agent Server (Subprocess)          │
-│         (Claude Code / Custom Agent / Remote Agent)          │
+│              外部 ACP 智能体服务器 (子进程)                   │
+│         (Claude Code / 自定义智能体 / 远程智能体)             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Data Flow
+### 数据流
 
 ```
-User input → /acp chat
+用户输入 → /acp chat
     ↓
 ACPConnectionService
     ↓
 ACPClient.connect(profile)
     ↓
-stdio transport → Subprocess agent
+stdio transport → 子进程智能体
     ↓
-Streaming response ← Real-time update callback
+流式响应 ← 实时更新回调
     ↓
-Aeloon replies to user
+Aeloon 回复用户
 ```
 
-### Lifecycle
+### 生命周期
 
-1. **Registration Phase**: Plugin registers commands, services, and configuration schema
-2. **Activation Phase**: Start ACPConnectionService, optional auto-connect
-3. **Connection Phase**: User executes `/acp connect`, establishes stdio transport
-4. **Interaction Phase**: Send messages via `/acp chat`, receive streaming responses
-5. **Disconnection Phase**: User executes `/acp disconnect` or cleanup when Agent stops
+1. **注册阶段**：插件注册命令、服务、配置模式
+2. **激活阶段**：启动 ACPConnectionService，可选自动连接
+3. **连接阶段**：用户执行 `/acp connect`，建立 stdio 传输
+4. **交互阶段**：通过 `/acp chat` 发送消息，接收流式响应
+5. **断开阶段**：用户执行 `/acp disconnect` 或 Agent 停止时清理
 
 ---
 
-## Troubleshooting
+## 故障排除
 
-### Connection Failed: Missing Python Module
+### 连接失败：缺少 Python 模块
 
 ```
 Failed to connect: missing Python module `acp`
 ```
 
-**Solution**:
+**解决**：
 ```bash
 pip install agent-client-protocol
 ```
 
-### Connection Failed: Command Not Found
+### 连接失败：命令未找到
 
 ```
 Failed to connect: [Errno 2] No such file or directory: 'npx'
 ```
 
-**Solution**: Ensure Node.js and npm are installed:
+**解决**：确保 Node.js 和 npm 已安装：
 ```bash
 npm --version
 node --version
 ```
 
-### Permission Denied
+### 权限被拒绝
 
-Check permission policy settings in the configuration file to ensure `allowFileRead`, `allowFileWrite`, and `allowShell` are enabled as needed.
+检查配置文件中的权限策略设置，确保 `allowFileRead`、`allowFileWrite`、`allowShell` 按需开启。
 
-### Timeout
+### 超时
 
-Increase the `timeoutSeconds` value in the configuration, or check if the agent server is running normally.
+增加配置中的 `timeoutSeconds` 值，或检查智能体服务器是否正常运行。

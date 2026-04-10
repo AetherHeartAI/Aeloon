@@ -27,7 +27,6 @@ def _get_merged_plugin_config(ctx: CommandContext) -> dict[str, Any]:
 
     return main_config
 
-
 HELP_TEXT = """\
 ACP Bridge — connect to external ACP agent servers
 
