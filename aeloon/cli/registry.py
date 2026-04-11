@@ -3,15 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Awaitable, Callable
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from aeloon.core.bus.events import InboundMessage, OutboundMessage
-
-CommandHandler = Callable[
-    ["InboundMessage", str],
-    "Awaitable[OutboundMessage | None] | OutboundMessage | None",
-]
+    from aeloon.plugins._sdk.types import CommandHandler
 
 
 @dataclass(frozen=True)
@@ -57,6 +52,7 @@ class CommandCatalog:
     """Minimal registry for declared command metadata."""
 
     _specs: dict[str, CommandSpec] = field(default_factory=dict)
+    _handlers: dict[str, "CommandHandler"] = field(default_factory=dict)
 
     @dataclass
     class _SlashNode:
@@ -70,6 +66,14 @@ class CommandCatalog:
         """Add or replace one command spec."""
         self._specs[spec.name] = spec
 
+    def register_handler(self, label: str, handler: "CommandHandler") -> None:
+        """Add or replace one slash handler by exact label."""
+        self._handlers[label.lower()] = handler
+
+    def find_handler(self, label: str) -> "CommandHandler | None":
+        """Return the handler matching one exact slash label."""
+        return self._handlers.get(label.strip().lower())
+
     def extend(self, specs: list[CommandSpec] | tuple[CommandSpec, ...]) -> None:
         """Register a batch of specs in order."""
         for spec in specs:
@@ -78,6 +82,10 @@ class CommandCatalog:
     def all(self) -> list[CommandSpec]:
         """Return all registered command specs."""
         return list(self._specs.values())
+
+    def all_handlers(self) -> dict[str, "CommandHandler"]:
+        """Return all registered slash handlers keyed by label."""
+        return dict(self._handlers)
 
     def slash_commands(self) -> list[tuple[str, str]]:
         """Return slash command labels and descriptions in registration order."""

@@ -2,61 +2,49 @@
 
 from __future__ import annotations
 
-from aeloon.cli.registry import CommandSpec
-from aeloon.core.agent.commands import BuiltinHandlerMap, CommandEnv
-from aeloon.core.bus.events import InboundMessage, OutboundMessage
-
-SPECS: tuple[CommandSpec, ...] = (
-    CommandSpec(name="new", help="Start a new conversation", slash_path=("new",)),
-    CommandSpec(
-        name="resume",
-        help="Resume a saved session",
-        slash_path=("resume",),
-        slash_paths=(("resume", "switch"), ("resume", "switch", "<session-key>")),
-    ),
-    CommandSpec(
-        name="sessions",
-        help="List or switch saved sessions",
-        slash_path=("sessions",),
-        slash_paths=(("sessions", "switch"), ("sessions", "switch", "<session-key>")),
-    ),
-)
+from aeloon.core.agent.commands import slash_command
+from aeloon.plugins._sdk.types import CommandContext
 
 
-async def handle_new(env: CommandEnv, msg: InboundMessage, _args_str: str) -> OutboundMessage:
+@slash_command(name="new", help="Start a new conversation", slash_path=("new",))
+async def handle_new(ctx: CommandContext, _args: str) -> str | None:
     """Clear the current session and archive unconsolidated history."""
-    session = env.sessions.get_or_create(msg.session_key)
+    session = ctx.sessions.get_or_create(ctx.session_key)
     snapshot = session.messages[session.last_consolidated :]
     session.clear()
-    env.sessions.save(session)
-    env.sessions.invalidate(session.key)
+    ctx.sessions.save(session)
+    ctx.sessions.invalidate(session.key)
 
     if snapshot:
-        env.schedule_background(env.memory_consolidator.archive_messages(snapshot))
+        ctx.schedule_background(ctx.memory_consolidator.archive_messages(snapshot))
 
-    return OutboundMessage(
-        channel=msg.channel,
-        chat_id=msg.chat_id,
-        content="New session started.",
-    )
+    return "New session started."
 
 
-async def handle_sessions(env: CommandEnv, msg: InboundMessage, args_str: str) -> OutboundMessage:
+@slash_command(
+    name="resume",
+    help="Resume a saved session",
+    slash_path=("resume",),
+    slash_paths=(("resume", "switch"), ("resume", "switch", "<session-key>")),
+)
+@slash_command(
+    name="sessions",
+    help="List or switch saved sessions",
+    slash_path=("sessions",),
+    slash_paths=(("sessions", "switch"), ("sessions", "switch", "<session-key>")),
+)
+async def handle_sessions(ctx: CommandContext, args_str: str) -> str | None:
     """List recent sessions or request a session switch."""
     args = args_str.split() if args_str else []
-    sessions = env.sessions.list_sessions()
+    sessions = ctx.sessions.list_sessions()
     if not args:
         if not sessions:
-            return OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content="No saved sessions found.",
-            )
+            return "No saved sessions found."
         lines = ["Recent sessions:"]
         for item in sessions[:10]:
             key = str(item.get("key") or "")
             updated_at = str(item.get("updated_at") or "unknown")
-            suffix = " (current)" if key == msg.session_key else ""
+            suffix = " (current)" if key == ctx.session_key else ""
             lines.append(f"- {key}{suffix} — {updated_at}")
         lines.extend(
             [
@@ -68,43 +56,16 @@ async def handle_sessions(env: CommandEnv, msg: InboundMessage, args_str: str) -
                 "- `/sessions switch <session-key>`",
             ]
         )
-        return OutboundMessage(
-            channel=msg.channel,
-            chat_id=msg.chat_id,
-            content="\n".join(lines),
-        )
+        return "\n".join(lines)
 
     if len(args) == 2 and args[0].lower() == "switch":
         target_key = args[1]
         if not any(item.get("key") == target_key for item in sessions):
-            return OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content=f"Session not found: {target_key}",
-            )
-        return OutboundMessage(
-            channel=msg.channel,
-            chat_id=msg.chat_id,
-            content=f"Switching to session: {target_key}",
-            metadata={
-                **(msg.metadata or {}),
-                "_session_switch": True,
-                "session_key": target_key,
-            },
-        )
+            return f"Session not found: {target_key}"
+        ctx.set_metadata("_session_switch", True)
+        ctx.set_metadata("session_key", target_key)
+        return f"Switching to session: {target_key}"
 
-    return OutboundMessage(
-        channel=msg.channel,
-        chat_id=msg.chat_id,
-        content=(
-            "Usage: /resume | /resume switch <session-key> | "
-            "/sessions | /sessions switch <session-key>"
-        ),
+    return (
+        "Usage: /resume | /resume switch <session-key> | /sessions | /sessions switch <session-key>"
     )
-
-
-HANDLERS: BuiltinHandlerMap = {
-    "new": handle_new,
-    "resume": handle_sessions,
-    "sessions": handle_sessions,
-}

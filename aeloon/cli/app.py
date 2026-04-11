@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import sys
-from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping
 
@@ -18,7 +17,7 @@ from aeloon.cli.registry import CommandCatalog, CommandSpec
 from aeloon.core.agent.commands import all_specs as all_command_specs
 
 if TYPE_CHECKING:
-    from aeloon.cli.registry import CommandHandler
+    from aeloon.plugins._sdk.types import CommandHandler
 
 _STATIC_COMMAND_SPECS: tuple[CommandSpec, ...] = (
     CommandSpec(
@@ -91,12 +90,14 @@ def create_builtin_catalog(
 ) -> CommandCatalog:
     """Return a catalog preloaded with built-in command specs."""
     catalog = CommandCatalog()
+    catalog.extend(BUILTIN_COMMAND_SPECS)
     if handlers:
-        catalog.extend(
-            tuple(replace(spec, handler=handlers.get(spec.name)) for spec in BUILTIN_COMMAND_SPECS)
-        )
-    else:
-        catalog.extend(BUILTIN_COMMAND_SPECS)
+        for spec in BUILTIN_COMMAND_SPECS:
+            handler = handlers.get(spec.name)
+            if handler is None:
+                continue
+            for path in spec.iter_slash_paths():
+                catalog.register_handler("/" + " ".join(path), handler)
     return catalog
 
 

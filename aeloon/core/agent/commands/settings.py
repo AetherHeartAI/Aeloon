@@ -4,44 +4,19 @@ from __future__ import annotations
 
 from loguru import logger
 
-from aeloon.cli.registry import CommandSpec
-from aeloon.core.agent.commands import BuiltinHandlerMap, CommandEnv
-from aeloon.core.bus.events import InboundMessage, OutboundMessage
+from aeloon.core.agent.commands import slash_command
+from aeloon.plugins._sdk.types import CommandContext
 from aeloon.providers.registry import PROVIDERS
 
-SPECS: tuple[CommandSpec, ...] = (
-    CommandSpec(
-        name="setting",
-        help="Open settings menu",
-        slash_path=("setting",),
-        slash_paths=(
-            ("setting", "output"),
-            ("setting", "output", "normal"),
-            ("setting", "output", "profile"),
-            ("setting", "output", "deep-profile"),
-            ("setting", "fast"),
-            ("setting", "fast", "on"),
-            ("setting", "fast", "off"),
-            ("setting", "models"),
-        ),
-    ),
-    CommandSpec(
-        name="profile",
-        help="Show or toggle profiling",
-        slash_path=("profile",),
-        slash_paths=(("profile", "on"), ("profile", "deep"), ("profile", "off")),
-    ),
-)
 
-
-def _list_available_models(env: CommandEnv) -> list[str]:
+def _list_available_models(ctx: CommandContext) -> list[str]:
     """Return configured runtime model candidates."""
     models: list[str] = []
-    current_model = env.model
+    current_model = ctx.model
     if current_model:
         models.append(current_model)
 
-    config = getattr(env.provider, "config", None)
+    config = getattr(ctx.provider, "config", None)
     if config is not None:
         defaults = getattr(getattr(config, "agents", None), "defaults", None)
         model_name = getattr(defaults, "model", None)
@@ -57,17 +32,23 @@ def _list_available_models(env: CommandEnv) -> list[str]:
                 continue
             if not (spec.is_oauth or spec.is_local or api_key or api_base):
                 continue
-            candidate = f"{spec.name}/{env.provider.get_default_model()}"
+            candidate = f"{spec.name}/{ctx.provider.get_default_model()}"
             if candidate not in models:
                 models.append(candidate)
     return models
 
 
-async def handle_profile(env: CommandEnv, msg: InboundMessage, args_str: str) -> OutboundMessage:
+@slash_command(
+    name="profile",
+    help="Show or toggle profiling",
+    slash_path=("profile",),
+    slash_paths=(("profile", "on"), ("profile", "deep"), ("profile", "off")),
+)
+async def handle_profile(ctx: CommandContext, args_str: str) -> str | None:
     """Show or update profiler state."""
     args = args_str.split() if args_str else []
-    profiler = env.profiler
-    settings = env.runtime_settings
+    profiler = ctx.profiler
+    settings = ctx.runtime_settings
     if not args:
         status = "enabled" if profiler.enabled else "disabled"
         mode = settings.output_mode
@@ -79,48 +60,43 @@ async def handle_profile(env: CommandEnv, msg: InboundMessage, args_str: str) ->
             lines.extend(["", report])
         else:
             lines.extend(["", "No profiling report available yet."])
-        return OutboundMessage(
-            channel=msg.channel,
-            chat_id=msg.chat_id,
-            content="\n".join(lines),
-        )
+        return "\n".join(lines)
 
     toggle = args[0].lower()
     if toggle == "on":
         profiler.enabled = True
         settings.output_mode = "profile"
-        return OutboundMessage(
-            channel=msg.channel,
-            chat_id=msg.chat_id,
-            content="Profiling enabled (profile mode).",
-        )
+        return "Profiling enabled (profile mode)."
     if toggle == "deep":
         profiler.enabled = True
         settings.output_mode = "deep-profile"
-        return OutboundMessage(
-            channel=msg.channel,
-            chat_id=msg.chat_id,
-            content="Profiling enabled (deep-profile mode). Workflow stages will be shown.",
-        )
+        return "Profiling enabled (deep-profile mode). Workflow stages will be shown."
     if toggle == "off":
         profiler.enabled = False
         settings.output_mode = "normal"
-        return OutboundMessage(
-            channel=msg.channel,
-            chat_id=msg.chat_id,
-            content="Profiling disabled.",
-        )
+        return "Profiling disabled."
 
-    return OutboundMessage(
-        channel=msg.channel,
-        chat_id=msg.chat_id,
-        content="Usage: /profile [on|deep|off]",
-    )
+    return "Usage: /profile [on|deep|off]"
 
 
-async def handle_setting(env: CommandEnv, msg: InboundMessage, args_str: str) -> OutboundMessage:
+@slash_command(
+    name="setting",
+    help="Open settings menu",
+    slash_path=("setting",),
+    slash_paths=(
+        ("setting", "output"),
+        ("setting", "output", "normal"),
+        ("setting", "output", "profile"),
+        ("setting", "output", "deep-profile"),
+        ("setting", "fast"),
+        ("setting", "fast", "on"),
+        ("setting", "fast", "off"),
+        ("setting", "models"),
+    ),
+)
+async def handle_setting(ctx: CommandContext, args_str: str) -> str | None:
     """Show or update runtime settings."""
-    settings = env.runtime_settings
+    settings = ctx.runtime_settings
     normalized_args = args_str.split() if args_str else []
     if len(normalized_args) == 1 and "=" in normalized_args[0]:
         key, value = normalized_args[0].split("=", 1)
@@ -128,41 +104,29 @@ async def handle_setting(env: CommandEnv, msg: InboundMessage, args_str: str) ->
             normalized_args = [key, value]
 
     if not normalized_args:
-        return OutboundMessage(
-            channel=msg.channel,
-            chat_id=msg.chat_id,
-            content=(
-                "## Settings\n\n"
-                f"- output: {settings.output_mode}\n"
-                f"- fast: {'on' if settings.fast else 'off'}\n"
-                "- models\n\n"
-                "## Usage\n\n"
-                "- `/setting output [normal|profile|deep-profile]`\n"
-                "- `/setting fast <on|off>`\n"
-                "- `/setting models`"
-            ),
+        return (
+            "## Settings\n\n"
+            f"- output: {settings.output_mode}\n"
+            f"- fast: {'on' if settings.fast else 'off'}\n"
+            "- models\n\n"
+            "## Usage\n\n"
+            "- `/setting output [normal|profile|deep-profile]`\n"
+            "- `/setting fast <on|off>`\n"
+            "- `/setting models`"
         )
 
     item = normalized_args[0].lower()
     if item == "output":
         if len(normalized_args) == 1:
-            return OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content=(
-                    "Output modes: normal, profile, deep-profile\n"
-                    f"Current output mode: {settings.output_mode}"
-                ),
+            return (
+                "Output modes: normal, profile, deep-profile\n"
+                f"Current output mode: {settings.output_mode}"
             )
         mode = normalized_args[1].lower()
         if mode not in {"normal", "profile", "deep-profile"}:
-            return OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content="Usage: /setting output [normal|profile|deep-profile]",
-            )
+            return "Usage: /setting output [normal|profile|deep-profile]"
         settings.output_mode = mode
-        env.profiler.enabled = mode in {"profile", "deep-profile"}
+        ctx.profiler.enabled = mode in {"profile", "deep-profile"}
         try:
             from aeloon.core.config.loader import load_config, save_config
 
@@ -171,44 +135,24 @@ async def handle_setting(env: CommandEnv, msg: InboundMessage, args_str: str) ->
             save_config(config)
         except Exception as exc:
             logger.warning("Failed to persist output mode setting: {}", exc)
-            return OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content=f"Output mode set to {mode} for current runtime, but failed to persist it to config.",
-            )
-        return OutboundMessage(
-            channel=msg.channel,
-            chat_id=msg.chat_id,
-            content=f"Output mode set to {mode} and saved to config.",
-        )
+            return f"Output mode set to {mode} for current runtime, but failed to persist it to config."
+        return f"Output mode set to {mode} and saved to config."
 
     if item == "models":
-        models = _list_available_models(env)
+        models = _list_available_models(ctx)
         lines = ["Available models:"]
         if models:
             lines.extend(f"- {model}" for model in models)
         else:
             lines.append("- No configured models found.")
-        return OutboundMessage(
-            channel=msg.channel,
-            chat_id=msg.chat_id,
-            content="\n".join(lines),
-        )
+        return "\n".join(lines)
 
     if item == "fast":
         if len(normalized_args) == 1:
-            return OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content=f"Fast mode is {'on' if settings.fast else 'off'}. Usage: /setting fast <on|off>",
-            )
+            return f"Fast mode is {'on' if settings.fast else 'off'}. Usage: /setting fast <on|off>"
         toggle = normalized_args[1].lower()
         if toggle not in {"on", "off"}:
-            return OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content="Usage: /setting fast <on|off>",
-            )
+            return "Usage: /setting fast <on|off>"
         enabled = toggle == "on"
         settings.fast = enabled
         try:
@@ -219,25 +163,7 @@ async def handle_setting(env: CommandEnv, msg: InboundMessage, args_str: str) ->
             save_config(config)
         except Exception as exc:
             logger.warning("Failed to persist fast mode setting: {}", exc)
-            return OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content=f"Fast mode set to {toggle} for current runtime, but failed to persist it to config.",
-            )
-        return OutboundMessage(
-            channel=msg.channel,
-            chat_id=msg.chat_id,
-            content=f"Fast mode set to {toggle} and saved to config. Restart Aeloon to apply startup-time LiteLLM behavior.",
-        )
+            return f"Fast mode set to {toggle} for current runtime, but failed to persist it to config."
+        return f"Fast mode set to {toggle} and saved to config. Restart Aeloon to apply startup-time LiteLLM behavior."
 
-    return OutboundMessage(
-        channel=msg.channel,
-        chat_id=msg.chat_id,
-        content="Usage: /setting output [normal|profile|deep-profile] | /setting fast <on|off> | /setting models",
-    )
-
-
-HANDLERS: BuiltinHandlerMap = {
-    "profile": handle_profile,
-    "setting": handle_setting,
-}
+    return "Usage: /setting output [normal|profile|deep-profile] | /setting fast <on|off> | /setting models"

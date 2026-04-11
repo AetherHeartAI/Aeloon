@@ -113,31 +113,204 @@ class CLICommandGroup:
 # ---------------------------------------------------------------------------
 
 
-@dataclasses.dataclass(frozen=True)
 class CommandContext:
-    """Immutable context passed to plugin command handlers."""
+    """Unified context passed to all command handlers (built-in and plugin).
 
-    session_key: str
-    channel: str
-    reply: Callable[[str], Awaitable[None]]
-    send_progress: Callable[..., Awaitable[None]]
-    plugin_config: Mapping[str, Any]
+    Construct via :meth:`from_dispatch` — do not instantiate directly.
+    """
+
+    __slots__ = (
+        "_agent_loop",
+        "_inbound_message",
+        "_metadata",
+        "_media",
+        "_replied",
+        "_cancelled",
+        "_restart_requested",
+        "session_key",
+        "channel",
+        "chat_id",
+        "sender_id",
+        "inbound_metadata",
+        "is_builtin",
+        "plugin_id",
+        "plugin_config",
+        "reply",
+        "send_progress",
+        "channel_auth",
+        "channel_manager",
+        "builtin_catalog",
+        "plugin_catalog_fn",
+    )
+
+    def __init__(self, **kwargs: Any) -> None:
+        for slot in self.__slots__:
+            setattr(self, slot, kwargs.get(slot))
+
+    @classmethod
+    def from_dispatch(
+        cls,
+        agent_loop: Any,
+        message: Any,
+        *,
+        plugin_id: str | None = None,
+        plugin_config: Mapping[str, Any] | None = None,
+        is_builtin: bool = False,
+        channel_auth: Any = None,
+        channel_manager: Any = None,
+        builtin_catalog: Any = None,
+        plugin_catalog_fn: Any = None,
+    ) -> CommandContext:
+        """Build a fully-bound context from runtime objects.
+
+        *agent_loop* and *message* are ``Any``-typed to avoid circular
+        imports; attribute access uses ``getattr`` with fallbacks.
+        """
+        from aeloon.core.bus.events import OutboundMessage
+        from aeloon.cli.registry import CommandCatalog
+
+        bus = getattr(agent_loop, "bus", None)
+
+        async def _reply(text: str) -> None:
+            if bus is not None:
+                bus.publish_outbound(
+                    OutboundMessage(
+                        channel=message.channel,
+                        chat_id=message.chat_id,
+                        content=text,
+                    )
+                )
+
+        async def _send_progress(*args: Any, **kwargs: Any) -> None:
+            if bus is not None:
+                content = args[0] if args else ""
+                bus.publish_outbound(
+                    OutboundMessage(
+                        channel=message.channel,
+                        chat_id=message.chat_id,
+                        content=content,
+                        metadata=kwargs.get("metadata", {"_progress": True}),
+                    )
+                )
+
+        return cls(
+            _agent_loop=agent_loop,
+            _inbound_message=message,
+            _metadata={},
+            _media=[],
+            _replied=False,
+            _cancelled=False,
+            _restart_requested=False,
+            session_key=getattr(message, "session_key", f"{message.channel}:{message.chat_id}"),
+            channel=message.channel,
+            chat_id=message.chat_id,
+            sender_id=getattr(message, "sender_id", ""),
+            inbound_metadata=dict(getattr(message, "metadata", None) or {}),
+            is_builtin=is_builtin,
+            plugin_id=plugin_id,
+            plugin_config=plugin_config or {},
+            reply=_reply,
+            send_progress=_send_progress,
+            channel_auth=channel_auth,
+            channel_manager=channel_manager,
+            builtin_catalog=builtin_catalog or CommandCatalog(),
+            plugin_catalog_fn=plugin_catalog_fn or (lambda: CommandCatalog()),
+        )
+
+    # -- Side-effect methods --
+
+    def set_metadata(self, key: str, value: Any) -> None:
+        self._metadata[key] = value
+
+    def add_media(self, paths: list[str]) -> None:
+        self._media.extend(paths)
+
+    def cancel_session(self) -> None:
+        self._cancelled = True
+
+    def restart(self) -> None:
+        self._restart_requested = True
+
+    # -- Proxied from agent_loop (read on demand, always fresh) --
+
+    @property
+    def sessions(self) -> Any:
+        return getattr(self._agent_loop, "sessions", None)
+
+    @property
+    def memory_consolidator(self) -> Any:
+        return getattr(self._agent_loop, "memory_consolidator", None)
+
+    @property
+    def profiler(self) -> Any:
+        return getattr(self._agent_loop, "profiler", None)
+
+    @property
+    def runtime_settings(self) -> Any:
+        return getattr(self._agent_loop, "runtime_settings", None)
+
+    @property
+    def model(self) -> str:
+        return str(getattr(self._agent_loop, "model", "") or "")
+
+    @property
+    def context_window_tokens(self) -> int:
+        return int(getattr(self._agent_loop, "context_window_tokens", 0) or 0)
+
+    @property
+    def provider(self) -> Any:
+        return getattr(self._agent_loop, "provider", None)
+
+    @property
+    def channels_config(self) -> Any:
+        return getattr(self._agent_loop, "channels_config", None)
+
+    @property
+    def plugin_manager(self) -> Any:
+        return getattr(self._agent_loop, "plugin_manager", None)
+
+    @property
+    def bus(self) -> Any:
+        return getattr(self._agent_loop, "bus", None)
+
+    @property
+    def schedule_background(self) -> Callable[..., Any]:
+        import asyncio
+
+        fn = getattr(self._agent_loop, "_schedule_background", None)
+        if fn is not None:
+            return fn
+        return lambda coro: asyncio.create_task(coro)
+
+    def as_bus_namespace(self) -> Any:
+        from types import SimpleNamespace
+
+        return SimpleNamespace(bus=self.bus)
 
 
-@dataclasses.dataclass(frozen=True)
 class CommandExecutionContext:
-    """Immutable execution context passed to command middlewares."""
+    """Stub kept for backward compatibility during migration.
 
-    session_key: str
-    channel: str
-    chat_id: str
-    sender_id: str
-    metadata: Mapping[str, Any]
-    is_builtin: bool
-    plugin_id: str | None = None
-    plugin_config: Mapping[str, Any] = dataclasses.field(default_factory=dict)
-    reply: Callable[[str], Awaitable[None]] | None = None
-    send_progress: Callable[..., Awaitable[None]] | None = None
+    Will be removed once all middleware call sites use
+    :class:`CommandContext` directly.
+    """
+
+    __slots__ = (
+        "session_key",
+        "channel",
+        "chat_id",
+        "sender_id",
+        "metadata",
+        "is_builtin",
+        "plugin_id",
+        "plugin_config",
+        "reply",
+        "send_progress",
+    )
+
+    def __init__(self, **kwargs: Any) -> None:
+        for slot in self.__slots__:
+            setattr(self, slot, kwargs.get(slot))
 
 
 # ---------------------------------------------------------------------------
@@ -158,10 +331,10 @@ class ServicePolicy(BaseModel):
 class CommandMiddleware(Protocol):
     """Protocol for dispatcher-level command middlewares."""
 
-    async def before(self, cmd: str, args: str, ctx: CommandExecutionContext) -> None:
+    async def before(self, cmd: str, args: str, ctx: CommandContext) -> None:
         """Run before the command handler."""
 
-    async def after(self, cmd: str, result: Any, ctx: CommandExecutionContext) -> None:
+    async def after(self, cmd: str, result: Any, ctx: CommandContext) -> None:
         """Run after the command handler returns."""
 
 

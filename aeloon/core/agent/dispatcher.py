@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import functools
 import os
 import sys
 from collections.abc import Mapping
-from dataclasses import replace
+from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from loguru import logger
@@ -16,13 +15,10 @@ from aeloon.cli.app import create_builtin_catalog
 from aeloon.cli.plugins import extend_catalog_with_plugin_commands
 from aeloon.cli.registry import CommandCatalog
 from aeloon.core.agent.channel_auth import ChannelAuthHelper
-from aeloon.core.agent.commands import (
-    CommandEnv,
-    all_handlers,
-)
+from aeloon.core.agent.commands import all_handlers
 from aeloon.core.agent.turn import TurnContext
 from aeloon.core.bus.events import InboundMessage, OutboundMessage
-from aeloon.plugins._sdk.types import CommandContext, CommandExecutionContext, CommandMiddleware
+from aeloon.plugins._sdk.types import CommandContext, CommandMiddleware
 
 if TYPE_CHECKING:
     from aeloon.channels.manager import ChannelManager
@@ -52,8 +48,6 @@ class Dispatcher:
     def channel_manager(self, value: ChannelManager | None) -> None:
         self._channel_manager = value
         self._channel_auth.set_channel_manager(value)
-        if hasattr(self, "_command_env"):
-            self._command_env.channel_manager = value
 
     @property
     def running(self) -> bool:
@@ -184,24 +178,7 @@ class Dispatcher:
 
     def _initialize_builtin_dispatch_state(self) -> None:
         """Construct shared built-in command catalog and bound handlers."""
-        self._command_env = CommandEnv(
-            self._agent_loop,
-            channel_auth=self._channel_auth,
-            channel_manager=self._channel_manager,
-            plugin_catalog_fn=self._plugin_command_catalog,
-        )
-        bound_handlers = {
-            name: functools.partial(handler, self._command_env)
-            for name, handler in all_handlers().items()
-        }
-        self._builtin_command_catalog = create_builtin_catalog(bound_handlers)
-        self._builtin_handlers = {
-            "/" + " ".join(path): spec.handler
-            for spec in self._builtin_command_catalog.all()
-            if spec.handler is not None
-            for path in spec.iter_slash_paths()
-        }
-        self._command_env.builtin_catalog = self._builtin_command_catalog
+        self._builtin_command_catalog = create_builtin_catalog(all_handlers())
 
     def _ensure_builtin_dispatch_state(self) -> None:
         """Initialize built-in dispatch state for tests that bypass __init__."""
@@ -218,7 +195,7 @@ class Dispatcher:
         if not hasattr(self, "_channel_auth"):
             self._channel_auth = ChannelAuthHelper()
         self._channel_auth.set_channel_manager(self._channel_manager)
-        if not hasattr(self, "_builtin_command_catalog") or not hasattr(self, "_builtin_handlers"):
+        if not hasattr(self, "_builtin_command_catalog"):
             self._initialize_builtin_dispatch_state()
 
     def _collect_command_middlewares(self) -> list[CommandMiddleware]:
@@ -234,36 +211,11 @@ class Dispatcher:
         middlewares.extend(record.middleware for record in plugin_records)
         return middlewares
 
-    def _build_command_execution_context(
-        self,
-        *,
-        msg: InboundMessage,
-        session_key: str,
-        is_builtin: bool,
-        plugin_id: str | None = None,
-        plugin_config: Mapping[str, Any] | None = None,
-        reply: Callable[[str], Awaitable[None]] | None = None,
-        send_progress: Callable[..., Awaitable[None]] | None = None,
-    ) -> CommandExecutionContext:
-        """Build immutable context for command middleware hooks."""
-        return CommandExecutionContext(
-            session_key=session_key,
-            channel=msg.channel,
-            chat_id=msg.chat_id,
-            sender_id=msg.sender_id,
-            metadata=dict(msg.metadata or {}),
-            is_builtin=is_builtin,
-            plugin_id=plugin_id,
-            plugin_config=dict(plugin_config or {}),
-            reply=reply,
-            send_progress=send_progress,
-        )
-
     async def _run_command_with_middlewares(
         self,
         cmd: str,
         args: str,
-        ctx: CommandExecutionContext,
+        ctx: CommandContext,
         execute: Callable[[], Awaitable[Any]],
     ) -> Any:
         """Run one command through the dispatcher middleware chain."""
@@ -312,49 +264,79 @@ class Dispatcher:
             )
         )
 
-    async def _execute_plugin_command(
+    async def _execute_slash_handler(
         self,
         *,
-        record: Any,
+        handler: Any,
         msg: InboundMessage,
         key: str,
         args_str: str,
         on_progress: Callable[..., Awaitable[None]] | None,
         cmd: str,
+        is_builtin: bool,
+        plugin_id: str | None = None,
+        plugin_config: Mapping[str, Any] | None = None,
     ) -> OutboundMessage | None:
-        """Execute one plugin command under dispatcher middleware and profiling."""
+        """Execute one slash command under dispatcher middleware and profiling."""
 
-        async def _plugin_reply(text: str) -> None:
+        async def _reply(text: str) -> None:
             await self._publish_command_reply(msg, text)
 
-        async def _plugin_progress(text: str, *, tool_hint: bool = False) -> None:
+        async def _progress(text: str, *, tool_hint: bool = False) -> None:
             await self._publish_command_progress(msg, text, tool_hint=tool_hint)
 
-        plugin_config = getattr(self._agent_loop.plugin_manager, "_plugin_config", {}).get(
-            record.plugin_id, {}
-        )
-        handler_ctx = CommandContext(
-            session_key=key,
-            channel=msg.channel,
-            reply=_plugin_reply,
-            send_progress=_plugin_progress,
+        if plugin_id is not None and plugin_config is None:
+            plugin_config = getattr(self._agent_loop.plugin_manager, "_plugin_config", {}).get(
+                plugin_id, {}
+            )
+
+        handler_ctx = CommandContext.from_dispatch(
+            self._agent_loop,
+            msg,
+            plugin_id=plugin_id,
             plugin_config=plugin_config,
+            is_builtin=is_builtin,
+            channel_auth=self._channel_auth,
+            channel_manager=self._channel_manager,
+            builtin_catalog=self._builtin_command_catalog,
+            plugin_catalog_fn=self._plugin_command_catalog,
         )
-        middleware_ctx = self._build_command_execution_context(
-            msg=msg,
-            session_key=key,
-            is_builtin=False,
-            plugin_id=record.plugin_id,
-            plugin_config=plugin_config,
-            reply=_plugin_reply,
-            send_progress=_plugin_progress,
-        )
+        handler_ctx.reply = _reply
+        handler_ctx.send_progress = _progress
+        handler_ctx.session_key = key
 
         async def _execute() -> str | None:
-            async with self._agent_loop._profiled_turn():
-                return await record.handler(handler_ctx, args_str)
+            profiled_turn = getattr(self._agent_loop, "_profiled_turn", None)
+            context_manager = profiled_turn() if profiled_turn is not None else nullcontext()
+            async with context_manager:
+                return await handler(handler_ctx, args_str)
 
-        result = await self._run_command_with_middlewares(cmd, args_str, middleware_ctx, _execute)
+        result = await self._run_command_with_middlewares(cmd, args_str, handler_ctx, _execute)
+
+        if handler_ctx._cancelled:
+            result = await self._cancel_session_tasks(msg, key)
+
+        if result is not None:
+            outbound = OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=result,
+                metadata=handler_ctx._metadata,
+                media=handler_ctx._media,
+            )
+        elif msg.channel == "cli":
+            outbound = OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="",
+                metadata=handler_ctx._metadata,
+                media=handler_ctx._media,
+            )
+        else:
+            outbound = None
+
+        if handler_ctx._restart_requested:
+            await self._schedule_restart(msg)
 
         if self._agent_loop.runtime_settings.show_deep_profile and on_progress is None:
             await self._agent_loop._publish_deep_profile_report(msg)
@@ -363,13 +345,7 @@ class Dispatcher:
         elif self._agent_loop.profiler.enabled and on_progress is None:
             await self._agent_loop._publish_profile_report(msg)
 
-        if result is not None:
-            return OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content=result,
-            )
-        return None
+        return outbound
 
     def _known_slash_commands(self) -> list[str]:
         return self._slash_command_catalog().slash_labels()
@@ -378,8 +354,8 @@ class Dispatcher:
         content = f"Unknown command: {cmd}. Use /help to see available commands."
         return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=content)
 
-    async def _handle_stop(self, msg: InboundMessage) -> None:
-        """Cancel all active tasks and subagents for the session."""
+    async def _cancel_session_tasks(self, msg: InboundMessage, session_key: str) -> str:
+        """Cancel active tasks and subagents for one session."""
         tasks = self._active_tasks.pop(msg.session_key, [])
         self._pending_latest.pop(msg.session_key, None)
         cancelled = sum(1 for task in tasks if not task.done() and task.cancel())
@@ -389,32 +365,46 @@ class Dispatcher:
             except (asyncio.CancelledError, Exception):
                 pass
 
-        sub_cancelled = await self._agent_loop.subagents.cancel_by_session(msg.session_key)
+        sub_cancelled = await self._agent_loop.subagents.cancel_by_session(session_key)
         total = cancelled + sub_cancelled
-        content = f"Stopped {total} task(s)." if total else "No active task to stop."
-        await self._agent_loop.bus.publish_outbound(
-            OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content=content,
-            )
-        )
+        return f"Stopped {total} task(s)." if total else "No active task to stop."
 
-    async def _handle_restart(self, msg: InboundMessage) -> None:
+    async def _schedule_restart(self, msg: InboundMessage) -> None:
         """Restart the process in-place via os.execv."""
-        await self._agent_loop.bus.publish_outbound(
-            OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content="Restarting...",
-            )
-        )
 
         async def _do_restart() -> None:
             await asyncio.sleep(1)
             os.execv(sys.executable, [sys.executable, "-m", "aeloon"] + sys.argv[1:])
 
         asyncio.create_task(_do_restart())
+
+    async def _handle_control_command(self, msg: InboundMessage, cmd: str) -> None:
+        """Execute `/stop` or `/restart` outside the normal dispatch queue."""
+        self._ensure_builtin_dispatch_state()
+        handler = self._builtin_command_catalog.find_handler(cmd)
+        if handler is None:
+            return
+        response = await self._execute_slash_handler(
+            handler=handler,
+            msg=msg,
+            key=msg.session_key,
+            args_str="",
+            on_progress=None,
+            cmd=cmd,
+            is_builtin=True,
+        )
+        if response is not None:
+            await self._agent_loop.bus.publish_outbound(response)
+
+    async def _handle_stop(self, msg: InboundMessage) -> None:
+        """Backward-compatible wrapper for `/stop`."""
+
+        await self._handle_control_command(msg, "/stop")
+
+    async def _handle_restart(self, msg: InboundMessage) -> None:
+        """Backward-compatible wrapper for `/restart`."""
+
+        await self._handle_control_command(msg, "/restart")
 
     def _extract_debug_error(
         self, content: str, metadata: Mapping[str, object] | None
@@ -520,24 +510,18 @@ class Dispatcher:
         cmd_parts = cmd_text.split()
         cmd = cmd_parts[0].lower() if cmd_parts else ""
         if cmd.startswith("/"):
-            dispatch_msg = msg if key == msg.session_key else replace(msg, session_key_override=key)
             args_str = " ".join(cmd_parts[1:])
-            handler = self._builtin_handlers.get(cmd)
+            builtin_catalog = self._builtin_command_catalog
+            handler = builtin_catalog.find_handler(cmd)
             if handler is not None:
-                middleware_ctx = self._build_command_execution_context(
+                return await self._execute_slash_handler(
+                    handler=handler,
                     msg=msg,
-                    session_key=key,
+                    key=key,
+                    args_str=args_str,
+                    on_progress=on_progress,
+                    cmd=cmd,
                     is_builtin=True,
-                )
-
-                async def _execute_builtin() -> OutboundMessage | None:
-                    return await handler(dispatch_msg, args_str)
-
-                return await self._run_command_with_middlewares(
-                    cmd,
-                    args_str,
-                    middleware_ctx,
-                    _execute_builtin,
                 )
 
             pm = getattr(self._agent_loop, "plugin_manager", None)
@@ -546,13 +530,15 @@ class Dispatcher:
                 command_name = cmd.lstrip("/")
                 if command_name in plugin_commands:
                     record = plugin_commands[command_name]
-                    return await self._execute_plugin_command(
-                        record=record,
+                    return await self._execute_slash_handler(
+                        handler=record.handler,
                         msg=msg,
                         key=key,
                         args_str=args_str,
                         on_progress=on_progress,
                         cmd=cmd,
+                        is_builtin=False,
+                        plugin_id=record.plugin_id,
                     )
 
             return self._unknown_command_response(msg, cmd)

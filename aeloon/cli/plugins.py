@@ -65,7 +65,12 @@ def build_plugin_command_specs(registry: Any) -> tuple[CommandSpec, ...]:
 
 def extend_catalog_with_plugin_commands(command_catalog: CommandCatalog, registry: Any) -> None:
     """Register plugin command specs into one catalog."""
-    command_catalog.extend(build_plugin_command_specs(registry))
+    specs = build_plugin_command_specs(registry)
+    command_catalog.extend(specs)
+    if registry is None:
+        return
+    for record in registry.commands.values():
+        command_catalog.register_handler(f"/{record.name}", record.handler)
 
 
 def build_lightweight_plugin_registry():

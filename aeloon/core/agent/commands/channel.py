@@ -2,58 +2,13 @@
 
 from __future__ import annotations
 
-from aeloon.cli.registry import CommandSpec
-from aeloon.core.agent.commands import BuiltinHandlerMap, CommandEnv
-from aeloon.core.bus.events import InboundMessage, OutboundMessage
-
-SPECS: tuple[CommandSpec, ...] = (
-    CommandSpec(
-        name="channel",
-        help="Manage one channel.",
-        cli_path=("channel",),
-        slash_path=("channel",),
-        slash_paths=(
-            ("channel", "list"),
-            ("channel", "status"),
-            ("channel", "status", "<name>"),
-            ("channel", "wechat"),
-            ("channel", "wechat", "login"),
-            ("channel", "wechat", "logout"),
-            ("channel", "wechat", "status"),
-            ("channel", "feishu"),
-            ("channel", "feishu", "login"),
-            ("channel", "feishu", "logout"),
-            ("channel", "feishu", "status"),
-            ("channel", "whatsapp"),
-            ("channel", "whatsapp", "login"),
-        ),
-    ),
-    CommandSpec(
-        name="wechat",
-        help="WeChat login management",
-        cli_path=("wechat",),
-        slash_path=("wechat",),
-        slash_paths=(("wechat", "login"), ("wechat", "logout"), ("wechat", "status")),
-    ),
-    CommandSpec(
-        name="feishu",
-        help="Feishu login management",
-        cli_path=("feishu",),
-        slash_path=("feishu",),
-        slash_paths=(("feishu", "login"), ("feishu", "logout"), ("feishu", "status")),
-    ),
-    CommandSpec(
-        name="whatsapp",
-        help="WhatsApp login management",
-        cli_path=("whatsapp",),
-        slash_paths=(("whatsapp", "login"),),
-    ),
-)
+from aeloon.core.agent.commands import slash_command
+from aeloon.plugins._sdk.types import CommandContext
 
 
-def _channel_enabled(env: CommandEnv, name: str) -> bool:
+def _channel_enabled(ctx: CommandContext, name: str) -> bool:
     """Return whether one channel is enabled in runtime config."""
-    config = env.channels_config
+    config = ctx.channels_config
     if config is None:
         return False
     section = getattr(config, name, None)
@@ -64,45 +19,84 @@ def _channel_enabled(env: CommandEnv, name: str) -> bool:
     return getattr(section, "enabled", False)
 
 
-async def handle_wechat(env: CommandEnv, msg: InboundMessage, args_str: str) -> OutboundMessage:
+@slash_command(
+    name="wechat",
+    help="WeChat login management",
+    slash_path=("wechat",),
+    slash_paths=(("wechat", "login"), ("wechat", "logout"), ("wechat", "status")),
+)
+async def handle_wechat(ctx: CommandContext, args_str: str) -> str | None:
     """Handle `/wechat` slash command."""
-    return await env.channel_auth.handle_wechat_command(
-        msg,
+    result = await ctx.channel_auth.handle_wechat_command(
+        ctx._inbound_message,
         args_str.split() if args_str else [],
-        env.as_bus_namespace(),
+        ctx.as_bus_namespace(),
     )
+    if result.metadata:
+        for k, v in result.metadata.items():
+            ctx.set_metadata(k, v)
+    if result.media:
+        ctx.add_media(result.media)
+    return result.content
 
 
-async def handle_feishu(env: CommandEnv, msg: InboundMessage, args_str: str) -> OutboundMessage:
+@slash_command(
+    name="feishu",
+    help="Feishu login management",
+    slash_path=("feishu",),
+    slash_paths=(("feishu", "login"), ("feishu", "logout"), ("feishu", "status")),
+)
+async def handle_feishu(ctx: CommandContext, args_str: str) -> str | None:
     """Handle `/feishu` slash command."""
-    return await env.channel_auth.handle_feishu_command(msg, args_str.split() if args_str else [])
+    result = await ctx.channel_auth.handle_feishu_command(
+        ctx._inbound_message,
+        args_str.split() if args_str else [],
+    )
+    if result.metadata:
+        for k, v in result.metadata.items():
+            ctx.set_metadata(k, v)
+    if result.media:
+        ctx.add_media(result.media)
+    return result.content
 
 
-async def handle_channel(env: CommandEnv, msg: InboundMessage, args_str: str) -> OutboundMessage:
+@slash_command(
+    name="channel",
+    help="Manage one channel.",
+    slash_path=("channel",),
+    slash_paths=(
+        ("channel", "list"),
+        ("channel", "status"),
+        ("channel", "status", "<name>"),
+        ("channel", "wechat"),
+        ("channel", "wechat", "login"),
+        ("channel", "wechat", "logout"),
+        ("channel", "wechat", "status"),
+        ("channel", "feishu"),
+        ("channel", "feishu", "login"),
+        ("channel", "feishu", "logout"),
+        ("channel", "feishu", "status"),
+        ("channel", "whatsapp"),
+        ("channel", "whatsapp", "login"),
+    ),
+)
+async def handle_channel(ctx: CommandContext, args_str: str) -> str | None:
     """Handle `/channel` slash command."""
     from aeloon.channels.registry import discover_all
 
     args = args_str.split() if args_str else []
     if not args:
-        return OutboundMessage(
-            channel=msg.channel,
-            chat_id=msg.chat_id,
-            content="Usage: /channel list | /channel status [name] | /channel <wechat|feishu|whatsapp> <action>",
-        )
+        return "Usage: /channel list | /channel status [name] | /channel <wechat|feishu|whatsapp> <action>"
 
     subcommand = args[0].lower()
     if subcommand == "list":
         lines = ["# Channels", ""]
         for name, cls in sorted(discover_all().items()):
-            enabled = _channel_enabled(env, name)
+            enabled = _channel_enabled(ctx, name)
             lines.append(
                 f"- `{name}` ({cls.display_name}) — {'enabled' if enabled else 'disabled'}"
             )
-        return OutboundMessage(
-            channel=msg.channel,
-            chat_id=msg.chat_id,
-            content="\n".join(lines),
-        )
+        return "\n".join(lines)
 
     if subcommand == "status":
         target = args[1].lower() if len(args) > 1 else None
@@ -110,40 +104,21 @@ async def handle_channel(env: CommandEnv, msg: InboundMessage, args_str: str) ->
         for name, cls in sorted(discover_all().items()):
             if target and name != target:
                 continue
-            enabled = _channel_enabled(env, name)
+            enabled = _channel_enabled(ctx, name)
             lines.append(
                 f"- `{name}` ({cls.display_name}) — {'enabled' if enabled else 'disabled'}"
             )
         if len(lines) == 2:
             lines.append(f"Unknown channel: {target}")
-        return OutboundMessage(
-            channel=msg.channel,
-            chat_id=msg.chat_id,
-            content="\n".join(lines),
-        )
+        return "\n".join(lines)
 
     channel_name = subcommand
     remainder = " ".join(args[1:])
     if channel_name == "wechat":
-        return await handle_wechat(env, msg, remainder)
+        return await handle_wechat(ctx, remainder)
     if channel_name == "feishu":
-        return await handle_feishu(env, msg, remainder)
+        return await handle_feishu(ctx, remainder)
     if channel_name == "whatsapp":
-        return OutboundMessage(
-            channel=msg.channel,
-            chat_id=msg.chat_id,
-            content="Use `aeloon channel whatsapp login` for WhatsApp login.",
-        )
+        return "Use `aeloon channel whatsapp login` for WhatsApp login."
 
-    return OutboundMessage(
-        channel=msg.channel,
-        chat_id=msg.chat_id,
-        content=f"Unknown channel: {channel_name}. Use /channel list to see available channels.",
-    )
-
-
-HANDLERS: BuiltinHandlerMap = {
-    "channel": handle_channel,
-    "feishu": handle_feishu,
-    "wechat": handle_wechat,
-}
+    return f"Unknown channel: {channel_name}. Use /channel list to see available channels."
