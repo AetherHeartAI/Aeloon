@@ -94,8 +94,8 @@
 - [x] validator regression coverage
 - [x] Confirm no Python runtime files changed unexpectedly.
 - [x] Confirm `aeloon/resources/skills/openviking-memory/` has no extra root-level files.
-- [ ] Stage the intended files only.
-- [ ] Create the commit using `git commit -m "fix(skills): normalize openviking-memory skill"`.
+- [x] Stage the intended files only.
+- [x] Create the commit using `git commit -m "fix(skills): normalize openviking-memory skill"`.
 - [x] If `SKILL 2.md` was untracked, confirm it is gone from the working tree even if it does not appear as a staged deletion.
 
 ## Runtime Contract To Preserve
@@ -275,7 +275,7 @@ Run: `pytest tests/test_skill_creator_scripts.py tests/test_openviking_memory_ba
 
 Expected: all selected tests PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add aeloon/resources/skills/openviking-memory/SKILL.md tests/test_skill_creator_scripts.py
