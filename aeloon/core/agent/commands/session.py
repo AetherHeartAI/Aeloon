@@ -26,13 +26,29 @@ SPECS: tuple[CommandSpec, ...] = (
 async def handle_new(env: CommandEnv, msg: InboundMessage, _args_str: str) -> OutboundMessage:
     """Clear the current session and archive unconsolidated history."""
     session = env.sessions.get_or_create(msg.session_key)
-    snapshot = session.messages[session.last_consolidated :]
+    start_index = env.memory.pending_start_index(session)
+    snapshot = list(session.messages[start_index:])
     session.clear()
     env.sessions.save(session)
     env.sessions.invalidate(session.key)
 
     if snapshot:
-        env.schedule_background(env.memory_consolidator.archive_messages(snapshot))
+        if env.bus is not None:
+            await env.bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="Archiving previous session history...",
+                    metadata={
+                        **(msg.metadata or {}),
+                        "_progress": True,
+                    },
+                )
+            )
+        await env.memory.run_new_session(
+            session=session,
+            pending_messages=snapshot,
+        )
 
     return OutboundMessage(
         channel=msg.channel,

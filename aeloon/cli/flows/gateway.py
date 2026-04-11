@@ -78,7 +78,10 @@ def run_gateway(
         actual_port,
         log_path,
     )
-    sync_workspace_templates(loaded_config.workspace_path)
+    sync_workspace_templates(
+        loaded_config.workspace_path,
+        include_file_memory=loaded_config.memory.backend == "file",
+    )
 
     bus = MessageBus()
     provider = make_provider(loaded_config)
@@ -101,6 +104,7 @@ def run_gateway(
         output_mode=loaded_config.agents.defaults.output_mode,
         fast=loaded_config.agents.defaults.fast,
         channels_config=loaded_config.channels,
+        memory_config=loaded_config.memory,
     )
 
     async def on_cron_job(job: CronJob) -> str | None:

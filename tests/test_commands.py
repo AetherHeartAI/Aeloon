@@ -390,6 +390,7 @@ def test_agent_uses_default_config_when_no_workspace_or_config_flags(mock_agent_
     assert mock_agent_runtime["sync_templates"].call_args.args == (
         mock_agent_runtime["config"].workspace_path,
     )
+    assert mock_agent_runtime["sync_templates"].call_args.kwargs == {"include_file_memory": True}
     assert mock_agent_runtime["agent_loop_cls"].call_args.kwargs["workspace"] == (
         mock_agent_runtime["config"].workspace_path
     )
@@ -449,7 +450,10 @@ def test_agent_wechat_login_message_uses_bus_backed_one_shot(monkeypatch, tmp_pa
 
     monkeypatch.setattr("aeloon.core.config.loader.load_config", lambda _path=None: config)
     monkeypatch.setattr("aeloon.core.config.paths.get_cron_dir", lambda: cron_dir)
-    monkeypatch.setattr("aeloon.cli.flows.agent.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr(
+        "aeloon.cli.flows.agent.sync_workspace_templates",
+        lambda _path, **_kwargs: None,
+    )
     monkeypatch.setattr("aeloon.cli.flows.agent.make_provider", lambda _config: object())
     monkeypatch.setattr("aeloon.cli.flows.agent.boot_plugins", AsyncMock(return_value=None))
     monkeypatch.setattr("aeloon.core.agent.loop.AgentLoop", _FakeAgentLoop)
@@ -519,7 +523,10 @@ def test_agent_wechat_logout_message_uses_bus_backed_one_shot(monkeypatch, tmp_p
 
     monkeypatch.setattr("aeloon.core.config.loader.load_config", lambda _path=None: config)
     monkeypatch.setattr("aeloon.core.config.paths.get_cron_dir", lambda: cron_dir)
-    monkeypatch.setattr("aeloon.cli.flows.agent.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr(
+        "aeloon.cli.flows.agent.sync_workspace_templates",
+        lambda _path, **_kwargs: None,
+    )
     monkeypatch.setattr("aeloon.cli.flows.agent.make_provider", lambda _config: object())
     monkeypatch.setattr("aeloon.cli.flows.agent.boot_plugins", AsyncMock(return_value=None))
     monkeypatch.setattr("aeloon.core.agent.loop.AgentLoop", _make_fake_loop)
@@ -607,7 +614,10 @@ def test_agent_config_sets_active_path(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         "aeloon.core.config.paths.get_cron_dir", lambda: config_file.parent / "cron"
     )
-    monkeypatch.setattr("aeloon.cli.flows.agent.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr(
+        "aeloon.cli.flows.agent.sync_workspace_templates",
+        lambda _path, **_kwargs: None,
+    )
     monkeypatch.setattr("aeloon.cli.flows.agent.make_provider", lambda _config: object())
     monkeypatch.setattr("aeloon.core.bus.queue.MessageBus", lambda: object())
     monkeypatch.setattr("aeloon.services.cron.service.CronService", lambda _store: object())
@@ -651,6 +661,7 @@ def test_agent_overrides_workspace_path(mock_agent_runtime):
     assert result.exit_code == 0
     assert mock_agent_runtime["config"].agents.defaults.workspace == str(workspace_path)
     assert mock_agent_runtime["sync_templates"].call_args.args == (workspace_path,)
+    assert mock_agent_runtime["sync_templates"].call_args.kwargs == {"include_file_memory": True}
     assert mock_agent_runtime["agent_loop_cls"].call_args.kwargs["workspace"] == workspace_path
 
 
@@ -668,6 +679,7 @@ def test_agent_workspace_override_wins_over_config_workspace(mock_agent_runtime,
     assert mock_agent_runtime["load_config"].call_args.args == (config_path.resolve(),)
     assert mock_agent_runtime["config"].agents.defaults.workspace == str(workspace_path)
     assert mock_agent_runtime["sync_templates"].call_args.args == (workspace_path,)
+    assert mock_agent_runtime["sync_templates"].call_args.kwargs == {"include_file_memory": True}
     assert mock_agent_runtime["agent_loop_cls"].call_args.kwargs["workspace"] == workspace_path
 
 
@@ -697,7 +709,7 @@ def test_gateway_uses_workspace_from_config_by_default(monkeypatch, tmp_path: Pa
     monkeypatch.setattr("aeloon.core.config.loader.load_config", lambda _path=None: config)
     monkeypatch.setattr(
         "aeloon.cli.flows.gateway.sync_workspace_templates",
-        lambda path: seen.__setitem__("workspace", path),
+        lambda path, **_kwargs: seen.__setitem__("workspace", path),
     )
     monkeypatch.setattr(
         "aeloon.cli.flows.gateway.make_provider",
@@ -725,7 +737,7 @@ def test_gateway_workspace_option_overrides_config(monkeypatch, tmp_path: Path) 
     monkeypatch.setattr("aeloon.core.config.loader.load_config", lambda _path=None: config)
     monkeypatch.setattr(
         "aeloon.cli.flows.gateway.sync_workspace_templates",
-        lambda path: seen.__setitem__("workspace", path),
+        lambda path, **_kwargs: seen.__setitem__("workspace", path),
     )
     monkeypatch.setattr(
         "aeloon.cli.flows.gateway.make_provider",
@@ -752,7 +764,10 @@ def test_gateway_warns_about_deprecated_memory_window(monkeypatch, tmp_path: Pat
 
     monkeypatch.setattr("aeloon.core.config.loader.set_config_path", lambda _path: None)
     monkeypatch.setattr("aeloon.core.config.loader.load_config", lambda _path=None: config)
-    monkeypatch.setattr("aeloon.cli.flows.gateway.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr(
+        "aeloon.cli.flows.gateway.sync_workspace_templates",
+        lambda _path, **_kwargs: None,
+    )
     monkeypatch.setattr(
         "aeloon.cli.flows.gateway.make_provider",
         lambda _config: (_ for _ in ()).throw(_StopGatewayError("stop")),
@@ -779,7 +794,10 @@ def test_gateway_uses_config_directory_for_cron_store(monkeypatch, tmp_path: Pat
     monkeypatch.setattr(
         "aeloon.core.config.paths.get_cron_dir", lambda: config_file.parent / "cron"
     )
-    monkeypatch.setattr("aeloon.cli.flows.gateway.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr(
+        "aeloon.cli.flows.gateway.sync_workspace_templates",
+        lambda _path, **_kwargs: None,
+    )
     monkeypatch.setattr("aeloon.cli.flows.gateway.make_provider", lambda _config: object())
     monkeypatch.setattr("aeloon.core.bus.queue.MessageBus", lambda: object())
     monkeypatch.setattr("aeloon.core.session.manager.SessionManager", lambda _workspace: object())
@@ -807,7 +825,10 @@ def test_gateway_uses_configured_port_when_cli_flag_is_missing(monkeypatch, tmp_
 
     monkeypatch.setattr("aeloon.core.config.loader.set_config_path", lambda _path: None)
     monkeypatch.setattr("aeloon.core.config.loader.load_config", lambda _path=None: config)
-    monkeypatch.setattr("aeloon.cli.flows.gateway.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr(
+        "aeloon.cli.flows.gateway.sync_workspace_templates",
+        lambda _path, **_kwargs: None,
+    )
     monkeypatch.setattr(
         "aeloon.cli.flows.gateway.make_provider",
         lambda _config: (_ for _ in ()).throw(_StopGatewayError("stop")),
@@ -829,7 +850,10 @@ def test_gateway_cli_port_overrides_configured_port(monkeypatch, tmp_path: Path)
 
     monkeypatch.setattr("aeloon.core.config.loader.set_config_path", lambda _path: None)
     monkeypatch.setattr("aeloon.core.config.loader.load_config", lambda _path=None: config)
-    monkeypatch.setattr("aeloon.cli.flows.gateway.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr(
+        "aeloon.cli.flows.gateway.sync_workspace_templates",
+        lambda _path, **_kwargs: None,
+    )
     monkeypatch.setattr(
         "aeloon.cli.flows.gateway.make_provider",
         lambda _config: (_ for _ in ()).throw(_StopGatewayError("stop")),

@@ -13,7 +13,6 @@ from loguru import logger
 from aeloon.core.agent.context import ContextBuilder
 from aeloon.core.agent.dispatcher import Dispatcher
 from aeloon.core.agent.kernel import run_agent_kernel
-from aeloon.core.agent.memory import MemoryConsolidator
 from aeloon.core.agent.middleware import ProfilerMiddleware
 from aeloon.core.agent.output_manager import OutputManager, OutputTracker
 from aeloon.core.agent.profiler import AgentProfiler, SpanCategory
@@ -26,11 +25,18 @@ from aeloon.core.agent.turn import TurnContext
 from aeloon.core.bus.events import InboundMessage, OutboundMessage
 from aeloon.core.bus.queue import MessageBus
 from aeloon.core.session.manager import SessionManager
+from aeloon.memory.base import MemoryBackendDeps, PreparedMemoryContext
+from aeloon.memory.manager import MemoryManager
 from aeloon.plugins._sdk.runtime import PLUGIN_SESSION_PREFIX
 from aeloon.providers.base import LLMProvider
 
 if TYPE_CHECKING:
-    from aeloon.core.config.schema import ChannelsConfig, ExecToolConfig, WebSearchConfig
+    from aeloon.core.config.schema import (
+        ChannelsConfig,
+        ExecToolConfig,
+        MemoryConfig,
+        WebSearchConfig,
+    )
     from aeloon.services.cron.service import CronService
 
 
@@ -79,10 +85,11 @@ class AgentLoop:
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
+        memory_config: MemoryConfig | None = None,
         output_mode: str = "normal",
         fast: bool = False,
     ):
-        from aeloon.core.config.schema import ExecToolConfig, WebSearchConfig
+        from aeloon.core.config.schema import ExecToolConfig, MemoryConfig, WebSearchConfig
 
         self.bus = bus
         self.channels_config = channels_config
@@ -96,6 +103,7 @@ class AgentLoop:
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
+        self.memory_config = memory_config or MemoryConfig()
 
         self.context = ContextBuilder(workspace)
         self.output_manager = OutputManager(workspace)
@@ -133,16 +141,19 @@ class AgentLoop:
         self.dispatcher = Dispatcher(self)
         self.plugin_manager: Any = None  # Injected after boot.
 
-        self.memory_consolidator = MemoryConsolidator(
-            workspace=workspace,
-            provider=provider,
-            model=self.model,
-            sessions=self.sessions,
-            context_window_tokens=context_window_tokens,
-            build_messages=self.context.build_messages,
-            get_tool_definitions=self.tools.get_definitions,
+        self.memory = MemoryManager(
+            memory_config=self.memory_config,
+            deps=MemoryBackendDeps(
+                workspace=workspace,
+                provider=provider,
+                model=self.model,
+                sessions=self.sessions,
+                context_window_tokens=context_window_tokens,
+                build_messages=self.context.build_messages,
+                get_tool_definitions=self.tools.get_definitions,
+            ),
         )
-        self.memory_consolidator.set_output_manager(self.output_manager)
+        self.memory_consolidator = self.memory.backend
 
         from aeloon.core.agent.tools.policy import set_file_policy
 
@@ -317,17 +328,32 @@ class AgentLoop:
             async with self.profiler.span(SpanCategory.SESSION_LOAD, "load"):
                 session = self.sessions.get_or_create(ctx.session_key)
 
-            # Skip plugin-private sessions when consolidating memory.
-            if not ctx.session_key.startswith(PLUGIN_SESSION_PREFIX):
-                await self.memory_consolidator.maybe_consolidate_by_tokens(session)
-
             self.tools.notify_turn_start(ctx)
+            is_plugin_internal = ctx.session_key.startswith(PLUGIN_SESSION_PREFIX)
+            if is_plugin_internal:
+                prepared = PreparedMemoryContext(
+                    history_start_index=self.memory.pending_start_index(session)
+                )
+            else:
+                prepared = await self.memory.prepare_turn(
+                    session=session,
+                    query=content,
+                    channel=ctx.channel,
+                    chat_id=ctx.chat_id,
+                    current_role=current_role,
+                )
 
-            history = session.get_history(max_messages=0)
+            history = session.get_history(start_index=prepared.history_start_index, max_messages=0)
             async with self.profiler.span(SpanCategory.CONTEXT, "build"):
+                memory_backend = getattr(self.memory, "backend", None)
+                hidden_skill_names = list(getattr(memory_backend, "hidden_skill_names", []))
                 initial_messages = self.context.build_messages(
                     history=history,
                     current_message=content,
+                    extra_system_sections=prepared.system_sections,
+                    runtime_lines=prepared.runtime_lines,
+                    extra_always_skills=prepared.always_skill_names,
+                    exclude_skill_names=hidden_skill_names,
                     media=media if media else None,
                     channel=ctx.channel,
                     chat_id=ctx.chat_id,
@@ -342,19 +368,25 @@ class AgentLoop:
             if final_content is None and default_empty_reply:
                 final_content = "I've completed processing but have no response to give."
 
+            skip = 1 + len(history)
+            raw_new_messages = [dict(message) for message in all_msgs[skip:]]
+            pre_save_len = len(session.messages)
             self.sessions.save_turn(
                 session,
                 all_msgs,
-                skip=1 + len(history),
+                skip=skip,
                 max_chars=self._SAVE_TOOL_RESULT_MAX_CHARS,
                 runtime_context_tag=ContextBuilder._RUNTIME_CONTEXT_TAG,
             )
+            persisted_new_messages = [dict(message) for message in session.messages[pre_save_len:]]
             async with self.profiler.span(SpanCategory.SESSION_SAVE, "save"):
                 self.sessions.save(session)
-            # Skip plugin-private sessions in background consolidation too.
-            if not ctx.session_key.startswith(PLUGIN_SESSION_PREFIX):
-                self._schedule_background(
-                    self.memory_consolidator.maybe_consolidate_by_tokens(session)
+            if not is_plugin_internal:
+                await self.memory.after_turn(
+                    session=session,
+                    raw_new_messages=raw_new_messages,
+                    persisted_new_messages=persisted_new_messages,
+                    final_content=final_content,
                 )
 
             if apply_message_suppress and self.tools.should_suppress_final_reply():
@@ -391,6 +423,8 @@ class AgentLoop:
 
     async def close_mcp(self) -> None:
         """Drain background work, then close MCP connections."""
+        await self.memory.close()
+
         if self._background_tasks:
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
             self._background_tasks.clear()

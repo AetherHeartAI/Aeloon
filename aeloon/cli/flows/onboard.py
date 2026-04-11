@@ -57,7 +57,10 @@ def run_onboard(*, workspace: str | None, config: str | None) -> None:
     if not workspace_path.exists():
         workspace_path.mkdir(parents=True, exist_ok=True)
         console.print(f"[green]✓[/green] Created workspace at {workspace_path}")
-    sync_workspace_templates(workspace_path)
+    sync_workspace_templates(
+        workspace_path,
+        include_file_memory=loaded.memory.backend == "file",
+    )
 
     agent_cmd = 'aeloon agent -m "Hello."'
     if config:

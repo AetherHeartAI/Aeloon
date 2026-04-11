@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Base(BaseModel):
@@ -136,6 +136,42 @@ class ExecToolConfig(Base):
     path_append: str = ""
 
 
+class MemoryConfig(Base):
+    """Memory backend selection and raw backend config sections."""
+
+    backend: str = "file"
+    backends: dict[str, dict[str, object]] = Field(
+        default_factory=lambda: {
+            "file": {},
+            "openviking": {
+                "ovConfig": {
+                    "storage": {},
+                    "vlm": {
+                        "provider": "api_provider",
+                        "api_key": "api_key_value",
+                        "model": "model_name",
+                    },
+                    "embedding": {
+                        "dense": {
+                            "provider": "api_provider",
+                            "api_key": "api_key_value",
+                            "model": "model_name",
+                            "dimension": 1024,
+                            "input": "multimodal",
+                        }
+                    },
+                },
+                "searchMode": "find",
+                "searchLimit": 8,
+                "scoreThreshold": 0.3,
+                "targetUri": "viking://user/default/memories/",
+                "extraTargetUris": [],
+                "maxCommitRounds": 5,
+            },
+        }
+    )
+
+
 class MCPServerConfig(Base):
     """MCP server settings."""
 
@@ -193,6 +229,7 @@ class Config(BaseSettings):
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
     plugins: dict[str, Any] = Field(default_factory=dict)
     hooks: dict[str, list[HookEntryConfig]] = Field(default_factory=dict)
 
@@ -288,4 +325,8 @@ class Config(BaseSettings):
                 return spec.default_api_base
         return None
 
-    model_config = ConfigDict(env_prefix="AELOON_", env_nested_delimiter="__", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="AELOON_",
+        env_nested_delimiter="__",
+        extra="ignore",
+    )

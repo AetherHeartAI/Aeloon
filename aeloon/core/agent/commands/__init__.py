@@ -60,6 +60,10 @@ class CommandEnv:
         return getattr(self._agent_loop, "memory_consolidator", None)
 
     @property
+    def memory(self) -> Any:
+        return getattr(self._agent_loop, "memory", None)
+
+    @property
     def profiler(self) -> Any:
         return getattr(self._agent_loop, "profiler", None)
 

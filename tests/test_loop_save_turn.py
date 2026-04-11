@@ -1,5 +1,13 @@
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 from aeloon.core.agent.context import ContextBuilder
+from aeloon.core.agent.loop import AgentLoop
+from aeloon.core.bus.queue import MessageBus
 from aeloon.core.session.manager import Session, SessionManager
+from aeloon.memory.base import PreparedMemoryContext
+from aeloon.providers.base import LLMResponse
 
 
 def _mk_manager(tmp_path) -> SessionManager:
@@ -82,3 +90,50 @@ def test_save_turn_keeps_tool_results_under_16k(tmp_path) -> None:
     )
 
     assert session.messages[0]["content"] == content
+
+
+class _FakeMemoryManager:
+    def __init__(self) -> None:
+        self.prepare_called = False
+        self.after_turn_called = False
+
+    async def prepare_turn(self, **kwargs) -> PreparedMemoryContext:
+        self.prepare_called = True
+        return PreparedMemoryContext(
+            system_sections=["# Memory Recall\n\nnone"],
+            runtime_lines=["Memory backend: fake"],
+            always_skill_names=[],
+            history_start_index=0,
+        )
+
+    async def after_turn(self, **kwargs) -> None:
+        self.after_turn_called = True
+
+    def pending_start_index(self, session: Session) -> int:
+        return 0
+
+    async def on_new_session(self, **kwargs) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_loop_uses_memory_manager_prepare_turn_before_llm(tmp_path) -> None:
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    provider.chat_with_retry = AsyncMock(return_value=LLMResponse(content="ok", tool_calls=[]))
+
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path,
+        model="test-model",
+    )
+    loop.tools.get_definitions = MagicMock(return_value=[])
+    loop.memory = _FakeMemoryManager()
+
+    await loop.process_direct("hello", session_key="cli:test")
+
+    assert loop.memory.prepare_called is True

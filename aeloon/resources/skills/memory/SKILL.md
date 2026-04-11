@@ -1,7 +1,7 @@
 ---
 name: memory
 description: Two-layer memory system with grep-based recall.
-always: true
+always: false
 ---
 
 # Memory

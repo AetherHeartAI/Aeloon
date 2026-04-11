@@ -2,9 +2,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import aeloon.core.agent.memory as memory_module
 from aeloon.core.agent.loop import AgentLoop
 from aeloon.core.bus.queue import MessageBus
+from aeloon.core.session.manager import SessionManager
+from aeloon.memory.backends import file as memory_module
+from aeloon.memory.base import MemoryBackendDeps
 from aeloon.providers.base import LLMResponse
 
 
@@ -199,3 +201,24 @@ async def test_preflight_consolidation_before_llm_call(tmp_path, monkeypatch) ->
     assert "consolidate" in order
     assert "llm" in order
     assert order.index("consolidate") < order.index("llm")
+
+
+def test_file_backend_pending_start_index_uses_session_offset(tmp_path) -> None:
+    from aeloon.memory.backends.file import FileMemoryBackend, FileMemoryConfig
+
+    backend = FileMemoryBackend(
+        FileMemoryConfig(),
+        MemoryBackendDeps(
+            workspace=tmp_path,
+            provider=MagicMock(),
+            model="test-model",
+            sessions=SessionManager(tmp_path),
+            context_window_tokens=4096,
+            build_messages=lambda *args, **kwargs: [],
+            get_tool_definitions=lambda: [],
+        ),
+    )
+    session = backend.deps.sessions.get_or_create("cli:test")
+    session.last_consolidated = 3
+
+    assert backend.pending_start_index(session) == 3

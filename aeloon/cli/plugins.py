@@ -401,7 +401,10 @@ async def _run_plugin_cli_command(
 
     loaded_config = load_runtime_config(config, workspace)
     print_deprecated_memory_window_notice(loaded_config)
-    sync_workspace_templates(loaded_config.workspace_path)
+    sync_workspace_templates(
+        loaded_config.workspace_path,
+        include_file_memory=loaded_config.memory.backend == "file",
+    )
 
     bus = MessageBus()
     provider = make_provider(loaded_config)
@@ -421,6 +424,7 @@ async def _run_plugin_cli_command(
         restrict_to_workspace=loaded_config.tools.restrict_to_workspace,
         mcp_servers=loaded_config.tools.mcp_servers,
         channels_config=loaded_config.channels,
+        memory_config=loaded_config.memory,
         output_mode=loaded_config.agents.defaults.output_mode,
         fast=loaded_config.agents.defaults.fast,
     )

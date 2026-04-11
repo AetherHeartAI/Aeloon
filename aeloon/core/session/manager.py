@@ -21,8 +21,8 @@ class Session:
     Stores messages in JSONL format for easy reading and persistence.
 
     Important: Messages are append-only for LLM cache efficiency.
-    The consolidation process writes summaries to MEMORY.md/HISTORY.md
-    but does NOT modify the messages list or get_history() output.
+    Memory backends may archive or summarize old turns without modifying
+    the messages list or get_history() output.
     """
 
     key: str  # channel:chat_id
@@ -30,7 +30,23 @@ class Session:
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     metadata: dict[str, Any] = field(default_factory=dict)
-    last_consolidated: int = 0  # Number of messages already consolidated to files
+    memory_state: dict[str, Any] = field(default_factory=dict)
+
+    def _file_memory_state(self) -> dict[str, Any]:
+        file_state = self.memory_state.setdefault("file", {})
+        if not isinstance(file_state, dict):
+            file_state = {}
+            self.memory_state["file"] = file_state
+        return file_state
+
+    @property
+    def last_consolidated(self) -> int:
+        raw_value = self._file_memory_state().get("last_consolidated", 0)
+        return raw_value if isinstance(raw_value, int) else 0
+
+    @last_consolidated.setter
+    def last_consolidated(self, value: int) -> None:
+        self._file_memory_state()["last_consolidated"] = value
 
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
         """Add a message to the session."""
@@ -61,10 +77,16 @@ class Session:
                                     declared.add(str(tc["id"]))
         return start
 
-    def get_history(self, max_messages: int = 500) -> list[dict[str, Any]]:
+    def get_history(
+        self,
+        *,
+        start_index: int | None = None,
+        max_messages: int = 500,
+    ) -> list[dict[str, Any]]:
         """Return unconsolidated messages for LLM input, aligned to a legal tool-call boundary."""
-        unconsolidated = self.messages[self.last_consolidated :]
-        sliced = unconsolidated[-max_messages:]
+        history_start = self.last_consolidated if start_index is None else start_index
+        unconsolidated = self.messages[history_start:]
+        sliced = unconsolidated[-max_messages:] if max_messages else list(unconsolidated)
 
         # Drop leading non-user messages to avoid starting mid-turn when possible.
         for i, message in enumerate(sliced):
@@ -90,7 +112,7 @@ class Session:
     def clear(self) -> None:
         """Clear all messages and reset session to initial state."""
         self.messages = []
-        self.last_consolidated = 0
+        self.memory_state = {}
         self.updated_at = datetime.now()
 
 
@@ -156,7 +178,7 @@ class SessionManager:
             messages = []
             metadata = {}
             created_at = None
-            last_consolidated = 0
+            memory_state: dict[str, Any] = {}
 
             with open(path, encoding="utf-8") as f:
                 for line in f:
@@ -173,7 +195,18 @@ class SessionManager:
                             if data.get("created_at")
                             else None
                         )
-                        last_consolidated = data.get("last_consolidated", 0)
+                        raw_memory_state = data.get("memory_state", {})
+                        if isinstance(raw_memory_state, dict):
+                            memory_state = raw_memory_state
+                        else:
+                            memory_state = {}
+
+                        if "memory_state" not in data:
+                            memory_state = {
+                                "file": {
+                                    "last_consolidated": data.get("last_consolidated", 0)
+                                }
+                            }
                     else:
                         messages.append(data)
 
@@ -182,7 +215,7 @@ class SessionManager:
                 messages=messages,
                 created_at=created_at or datetime.now(),
                 metadata=metadata,
-                last_consolidated=last_consolidated,
+                memory_state=memory_state,
             )
         except Exception as e:
             logger.warning("Failed to load session {}: {}", key, e)
@@ -199,7 +232,7 @@ class SessionManager:
                 "created_at": session.created_at.isoformat(),
                 "updated_at": session.updated_at.isoformat(),
                 "metadata": session.metadata,
-                "last_consolidated": session.last_consolidated,
+                "memory_state": session.memory_state,
             }
             f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
             for msg in session.messages:

@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from aeloon.core.agent.memory import MemoryStore
+from aeloon.core.session.manager import Session, SessionManager
+from aeloon.memory.base import MemoryBackendDeps
 from aeloon.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 
@@ -49,6 +51,25 @@ class ScriptedProvider(LLMProvider):
 
     def get_default_model(self) -> str:
         return "test-model"
+
+
+def _make_file_backend(tmp_path: Path):
+    from aeloon.memory.backends.file import FileMemoryBackend, FileMemoryConfig
+
+    provider = AsyncMock()
+    provider.chat_with_retry = AsyncMock(return_value=LLMResponse(content=None, tool_calls=[]))
+    return FileMemoryBackend(
+        FileMemoryConfig(),
+        MemoryBackendDeps(
+            workspace=tmp_path,
+            provider=provider,
+            model="test-model",
+            sessions=SessionManager(tmp_path),
+            context_window_tokens=4096,
+            build_messages=lambda *args, **kwargs: [],
+            get_tool_definitions=lambda: [],
+        ),
+    )
 
 
 class TestMemoryConsolidationTypeHandling:
@@ -481,3 +502,23 @@ class TestMemoryConsolidationTypeHandling:
         provider.chat_with_retry = AsyncMock(return_value=no_tool)
         assert await store.consolidate(messages, provider, "m") is False
         assert store._consecutive_failures == 1
+
+
+@pytest.mark.asyncio
+async def test_file_backend_prepare_turn_reads_memory_and_reports_offset(tmp_path: Path) -> None:
+    backend = _make_file_backend(tmp_path)
+    backend.store.write_long_term("# Facts\nUser likes tea.")
+    session = Session(key="cli:test")
+    session.last_consolidated = 4
+
+    prepared = await backend.prepare_turn(
+        session=session,
+        query="hello",
+        channel="cli",
+        chat_id="direct",
+        current_role="user",
+    )
+
+    assert prepared.history_start_index == 4
+    assert any("Long-term Memory" in section for section in prepared.system_sections)
+    assert any("MEMORY.md" in line for line in prepared.runtime_lines)

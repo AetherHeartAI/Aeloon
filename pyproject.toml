@@ -58,6 +58,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+openviking = [
+    "openviking",
+]
 wecom = [
     "wecom-aibot-sdk-python>=0.1.5",
 ]

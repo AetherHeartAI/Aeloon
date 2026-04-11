@@ -172,3 +172,14 @@ def test_window_cuts_mid_tool_group():
     # leaving orphan tool results for split_a at the front.
     history = session.get_history(max_messages=6)
     _assert_no_orphans(history)
+
+
+def test_get_history_uses_explicit_start_index() -> None:
+    session = Session(key="cli:test")
+    for i in range(10):
+        session.add_message("user", f"msg{i}")
+
+    history = session.get_history(start_index=6, max_messages=10)
+
+    assert history[0]["content"] == "msg6"
+    assert history[-1]["content"] == "msg9"
