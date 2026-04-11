@@ -1,12 +1,12 @@
 ---
 name: openviking-memory
-description: OpenViking-backed memory recall and archival guidance.
-always: false
+description: Use when the active memory backend is `openviking` and recalled OpenViking results are already injected into the prompt. Treat OpenViking recall as the source of long-term memory for the current turn, stay in OpenViking-backed memory mode, and ignore legacy file-memory artifacts unless the user explicitly asks about migration or file-backed memory.
 ---
 
 # OpenViking Memory
 
-- OpenViking recall is injected into the prompt automatically when the `openviking` memory backend is active.
-- Do not switch back to legacy file-backed memory behavior in this mode.
-- Treat recalled OpenViking items as the source of long-term context for the current turn.
-- If memory-related files from an older file-backed setup still exist in the workspace, ignore them unless the user explicitly asks about migration.
+- Treat the `# OpenViking Recall` section as the authoritative long-term memory context for the current turn.
+- Stay in OpenViking-backed memory mode. Do not switch the agent back to legacy file-backed memory behavior unless the user explicitly asks for migration or legacy memory handling.
+- Use recalled OpenViking items to answer questions, maintain continuity, and ground follow-up decisions.
+- Ignore legacy file-memory artifacts in the workspace by default.
+- If the user explicitly asks about migration or file-backed memory, compare the legacy workspace artifacts with the current OpenViking-backed behavior before recommending changes.

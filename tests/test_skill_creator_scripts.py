@@ -35,6 +35,14 @@ def test_validate_skill_accepts_existing_skill_creator() -> None:
     assert valid, message
 
 
+def test_validate_skill_accepts_openviking_memory() -> None:
+    valid, message = quick_validate.validate_skill(
+        Path("aeloon/resources/skills/openviking-memory").resolve()
+    )
+
+    assert valid, message
+
+
 def test_validate_skill_rejects_placeholder_description(tmp_path: Path) -> None:
     skill_dir = tmp_path / "placeholder-skill"
     skill_dir.mkdir()
