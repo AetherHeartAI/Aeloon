@@ -246,7 +246,7 @@ Plugins can contribute status segments to the bottom status bar, need to synchro
 | **ScienceResearch** | [`README.md`](ScienceResearch/README.md) | Complete guide for AI4S scientific research task plugin |
 | **Wiki** | [`README.md`](Wiki/README.md) | Complete guide for local knowledge base management plugin |
 | **ACP Bridge** | [`README.md`](acp_bridge/README.md) | ACP protocol bridge: connect to external agent servers |
-| **PluginCreator** | [`README-PC.md`](PluginCreator/README-PC.md) | Complete guide for plugin development workflow planner |
+| **PluginCreator** | [`README.md`](PluginCreator/README.md) | Complete guide for plugin development workflow planner |
 | **SkillGraph** | [`README.md`](SkillGraph/README.md) | Skill compiler: compile SKILL.md into runnable Python artifacts |
 
 Specific guides include: detailed architecture, runtime flow, data models, operational configuration, and extension patterns.
