@@ -1,110 +1,109 @@
 <p align="right">
-<b>中文</b> | <a href="./README.en.md">English</a>
+<b>English</b> | <a href="./README-wiki.md">中文</a>
 </p>
+# Wiki Plugin
 
-# Wiki 插件
+Local Wiki and knowledge base management plugin — supports content ingestion, automatic summarization, and conversation enhancement.
 
-本地 Wiki 与知识库管理插件 —— 支持内容采集、自动摘要和对话增强。
+## Table of Contents
 
-## 目录
-
-1. [概述](#概述)
-2. [安装与启用](#安装与启用)
-3. [命令参考](#命令参考)
-4. [使用模式](#使用模式)
-5. [配置选项](#配置选项)
-6. [使用工作流](#使用工作流)
-7. [架构设计](#架构设计)
+1. [Overview](#overview)
+2. [Installation & Activation](#installation--activation)
+3. [Command Reference](#command-reference)
+4. [Usage Modes](#usage-modes)
+5. [Configuration Options](#configuration-options)
+6. [Usage Workflows](#usage-workflows)
+7. [Architecture Design](#architecture-design)
 
 ---
 
-## 概述
+## Overview
 
-Wiki 插件是一个**混合类型插件**，为你的 Aeloon 助手提供本地知识库管理能力。它允许你将外部文档、网页、论文等资源采集到本地，自动生成结构化的 Wiki 条目，并在对话中提供智能化的知识增强。
+The Wiki plugin is a **hybrid plugin** that provides local knowledge base management capabilities for your Aeloon assistant. It allows you to ingest external documents, web pages, papers, and other resources into your local system, automatically generates structured Wiki entries, and provides intelligent knowledge enhancement during conversations.
 
-### 核心能力
+### Core Capabilities
 
-| 能力 | 说明 |
-|------|------|
-| **内容采集** | 支持 URL、arXiv 论文、本地文件（PDF、DOCX、Markdown、TXT、CSV） |
-| **智能摘要** | 使用 LLM 分析内容，生成结构化知识条目 |
-| **知识关联** | 自动构建领域、摘要、概念三级知识图谱 |
-| **对话增强** | 根据用户问题自动检索相关知识，注入对话上下文 |
-| **后台任务** | 长时间运行的采集和处理任务异步执行 |
+| Capability | Description |
+|------------|-------------|
+| **Content Ingestion** | Supports URLs, arXiv papers, local files (PDF, DOCX, Markdown, TXT, CSV) |
+| **Intelligent Summarization** | Uses LLM to analyze content and generate structured knowledge entries |
+| **Knowledge Linking** | Automatically builds three-level knowledge graph: domains, summaries, and concepts |
+| **Conversation Enhancement** | Automatically retrieves relevant knowledge based on user queries and injects into conversation context |
+| **Background Tasks** | Long-running ingestion and processing tasks execute asynchronously |
 
-### 知识库结构
+### Knowledge Base Structure
 
 ```
 wiki_root/
-├── WIKI_HARNESS.md       # 知识库使用规范
-├── raw/                  # 原始内容存储
-│   ├── links/           # URL 链接原始内容
-│   ├── files/           # 本地文件副本
-│   └── meta/            # 源数据元信息
-├── wiki/                 # 处理后知识条目
-│   ├── domains/         # 领域组织页面
-│   ├── summaries/       # 源级摘要
-│   └── concepts/        # 跨源概念
-└── state/               # 状态管理
-    ├── manifest.json    # 跟踪源和页面清单
-    └── log.jsonl        # 操作日志
+├── WIKI_HARNESS.md       # Knowledge base usage guidelines
+├── raw/                  # Raw content storage
+│   ├── links/           # URL link raw content
+│   ├── files/           # Local file copies
+│   └── meta/            # Source metadata
+├── wiki/                 # Processed knowledge entries
+│   ├── domains/         # Domain organization pages
+│   ├── summaries/       # Source-level summaries
+│   └── concepts/        # Cross-source concepts
+└── state/               # State management
+    ├── manifest.json    # Tracking manifest for sources and pages
+    └── log.jsonl        # Operation logs
 ```
 
 ---
 
-## 安装与启用
+## Installation & Activation
 
-### 前置条件
+### Prerequisites
 
 - Aeloon >= 0.1.0
-- Wiki 插件为内置插件，无需额外安装
+- Wiki plugin is built-in, no additional installation required
 
-### 启用插件
+### Enable Plugin
 
-在 `~/.aeloon/config.toml` 中添加：
+Add to `~/.aeloon/config.toml`:
 
 ```toml
 [plugins]
 wiki = { enabled = true }
 ```
 
-或使用插件专属配置：
+Or use plugin-specific configuration:
 
 ```toml
 [wiki]
 enabled = true
-repoRoot = "~/my-wiki"           # 知识库根目录
-autoQueryEnabled = true          # 启用自动查询增强
+repoRoot = "~/my-wiki"           # Knowledge base root directory
+autoQueryEnabled = true          # Enable automatic query enhancement
 supportedFormats = ["pdf", "docx", "md", "txt", "csv"]
 ```
 
-重启 Aeloon 后插件自动加载。
+Restart Aeloon to automatically load the plugin.
 
 ---
 
-## 命令参考
+## Command Reference
 
-### 知识库管理
+### Knowledge Base Management
 
-#### `/wiki init [path]` —— 初始化知识库
+#### `/wiki init [path]` — Initialize Knowledge Base
 
-创建新的知识库目录结构。如果不指定路径，使用配置中的 `repoRoot` 或默认路径。
+Create a new knowledge base directory structure. If no path is specified, uses the configured `repoRoot` or default path.
 
 ```
-/wiki init                    # 使用默认路径
-/wiki init ~/my-knowledge     # 指定自定义路径
-/wiki init /workspace/wiki    # 使用工作区路径
+/wiki init                    # Use default path
+/wiki init ~/my-knowledge     # Specify custom path
+/wiki init /workspace/wiki    # Use workspace path
 ```
 
-#### `/wiki status` —— 查看知识库状态
+#### `/wiki status` — View Knowledge Base Status
 
-显示当前知识库的统计信息和配置状态。
+Display statistics and configuration status of the current knowledge base.
 
 ```
 /wiki status
 ```
 
-输出示例：
+Example output:
 ```
 ## Wiki Status
 
@@ -117,64 +116,64 @@ supportedFormats = ["pdf", "docx", "md", "txt", "csv"]
 - concepts: 5
 ```
 
-#### `/wiki remove --confirm` —— 删除知识库
+#### `/wiki remove --confirm` — Delete Knowledge Base
 
-**警告**：此操作会永久删除整个知识库！
+**Warning**: This action permanently deletes the entire knowledge base!
 
 ```
-/wiki remove                  # 显示确认提示
-/wiki remove --confirm        # 确认删除
+/wiki remove                  # Show confirmation prompt
+/wiki remove --confirm        # Confirm deletion
 ```
 
 ---
 
-### 内容采集
+### Content Ingestion
 
-#### `/wiki <URL|文本>` —— 采集 URL 或文本中的引用
+#### `/wiki <URL|text>` — Ingest URL or Text References
 
-直接从 URL 或自由文本中采集内容。支持自动识别 URL、arXiv 引用。
+Directly ingest content from URLs or free text. Supports automatic URL recognition, arXiv references.
 
 ```
 /wiki https://example.com/article
 
-/wiki 请分析这篇论文 https://arxiv.org/abs/2401.12345
+/wiki Please analyze this paper https://arxiv.org/abs/2401.12345
 
-/wiki 参考这些资料：
+/wiki Reference these materials:
 - https://docs.python.org/3/tutorial/
 - https://arxiv.org/abs/2305.12345
 ```
 
-**注意**：URL 采集在后台运行，完成后自动发送结果。
+**Note**: URL ingestion runs in the background and automatically sends results when complete.
 
-#### `/wiki add <路径|文本>` —— 添加本地文件
+#### `/wiki add <path|text>` — Add Local Files
 
-采集本地文件到知识库。
+Ingest local files into the knowledge base.
 
 ```
 /wiki add ~/Documents/paper.pdf
 /wiki add /workspace/notes.md
 /wiki add ./data/report.csv
 
-/wiki add 请分析这些文件：
+/wiki add Please analyze these files:
 - ~/docs/specs.pdf
 - ~/docs/design.md
 ```
 
-**支持格式**：PDF、DOCX、Markdown、TXT、CSV
+**Supported Formats**: PDF, DOCX, Markdown, TXT, CSV
 
 ---
 
-### 摘要处理
+### Summarization Processing
 
-#### `/wiki digest` —— 重新处理原始内容
+#### `/wiki digest` — Re-process Raw Content
 
-对已采集但未处理的原始内容重新运行摘要生成。
+Re-run summarization generation on ingested but unprocessed raw content.
 
 ```
 /wiki digest
 ```
 
-输出示例：
+Example output:
 ```
 | Source | Artifacts | Summary |
 |--------|-----------|---------|
@@ -184,17 +183,17 @@ supportedFormats = ["pdf", "docx", "md", "txt", "csv"]
 
 ---
 
-### 查询与检索
+### Query & Retrieval
 
-#### `/wiki list` —— 列出所有内容
+#### `/wiki list` — List All Content
 
-显示已跟踪的原始源和生成的 Wiki 条目。
+Display tracked raw sources and generated Wiki entries.
 
 ```
 /wiki list
 ```
 
-输出示例：
+Example output:
 ```
 ## Wiki List
 
@@ -209,9 +208,9 @@ supportedFormats = ["pdf", "docx", "md", "txt", "csv"]
 - `domain:ai` -> `wiki/domains/ai.md`
 ```
 
-#### `/wiki get <条目>` —— 查看具体条目
+#### `/wiki get <entry>` — View Specific Entry
 
-显示指定 Wiki 条目的完整内容。
+Display the complete content of a specified Wiki entry.
 
 ```
 /wiki get summary:paper
@@ -219,62 +218,62 @@ supportedFormats = ["pdf", "docx", "md", "txt", "csv"]
 /wiki get domain:ai
 ```
 
-#### `/wiki map [条目]` —— 生成关系图谱
+#### `/wiki map [entry]` — Generate Relationship Graph
 
-以 Mermaid 图表形式展示 Wiki 条目之间的关系。
+Display relationships between Wiki entries as a Mermaid diagram.
 
 ```
-/wiki map                     # 完整知识图谱
-/wiki map domain:ai          # 特定领域的关系图
-/wiki map summary:paper      # 特定摘要的关联图
+/wiki map                     # Complete knowledge graph
+/wiki map domain:ai          # Relationship graph for specific domain
+/wiki map summary:paper      # Relationship graph for specific summary
 ```
 
 ---
 
-### 使用模式控制
+### Usage Mode Control
 
-#### `/wiki use <模式>` —— 控制 Wiki 在对话中的使用
+#### `/wiki use <mode>` — Control Wiki Usage in Conversation
 
-设置当前会话的 Wiki 增强模式：
-
-```
-/wiki use off                # 关闭 Wiki 增强
-/wiki use prefer-local       # 优先使用本地知识（默认）
-/wiki use local-only         # 仅使用本地知识
-/wiki use status             # 查看当前模式
-```
-
-| 模式 | 说明 |
-|------|------|
-| `off` | 对话中完全不使用 Wiki 增强 |
-| `prefer-local` | 先尝试从 Wiki 获取知识，缺失时使用 LLM 常识 |
-| `local-only` | 仅从 Wiki 获取知识，明确告知知识缺失 |
-
-#### `/wiki attach <on|off|status>` —— 自动附件采集
-
-控制是否自动采集会话中的文件附件：
+Set the current session's Wiki enhancement mode:
 
 ```
-/wiki attach on              # 开启自动采集
-/wiki attach off             # 关闭自动采集
-/wiki attach status          # 查看当前状态
+/wiki use off                # Disable Wiki enhancement
+/wiki use prefer-local       # Prefer local knowledge (default)
+/wiki use local-only         # Use local knowledge only
+/wiki use status             # View current mode
 ```
 
-开启后，会话中收到的 PDF、文档等附件会自动导入 Wiki 并生成摘要。
+| Mode | Description |
+|------|-------------|
+| `off` | Do not use Wiki enhancement in conversation at all |
+| `prefer-local` | Try to get knowledge from Wiki first, fall back to LLM common knowledge if missing |
+| `local-only` | Only get knowledge from Wiki, explicitly report knowledge gap |
+
+#### `/wiki attach <on|off|status>` — Automatic Attachment Ingestion
+
+Control whether to automatically ingest file attachments in sessions:
+
+```
+/wiki attach on              # Enable automatic ingestion
+/wiki attach off             # Disable automatic ingestion
+/wiki attach status          # View current status
+```
+
+When enabled, PDFs, documents, and other attachments received in sessions are automatically imported into Wiki and summarized.
 
 ---
 
-### 后台任务
+### Background Tasks
 
-#### `/wiki jobs` —— 查看后台任务
+#### `/wiki jobs` — View Background Tasks
 
-显示当前会话正在运行的 Wiki 后台任务。
+Display currently running Wiki background tasks for this session.
 
 ```
 /wiki jobs
 ```
 
-输出示例：
+Example output:
 ```
 Wiki background task is running.
 - command: `https://arxiv.org/abs/2401.12345`
@@ -283,28 +282,28 @@ Wiki background task is running.
 
 ---
 
-## 使用模式
+## Usage Modes
 
-### 模式对比
+### Mode Comparison
 
-| 模式 | 触发条件 | 知识缺失时行为 |
-|------|----------|----------------|
-| `off` | 不触发 | - |
-| `prefer-local` | 对话中自动触发 | 回退到 LLM 常识 |
-| `local-only` | 仅在知识查询时触发 | 明确告知知识缺失 |
+| Mode | Trigger Condition | Behavior When Knowledge Missing |
+|------|-------------------|--------------------------------|
+| `off` | Not triggered | - |
+| `prefer-local` | Auto-triggered in conversation | Fall back to LLM common knowledge |
+| `local-only` | Only triggered on knowledge queries | Explicitly report knowledge gap |
 
-### 知识查询识别
+### Knowledge Query Recognition
 
-当 `local-only` 模式开启时，插件会识别以下类型的知识查询：
+When `local-only` mode is enabled, the plugin recognizes the following types of knowledge queries:
 
-- 包含 `?` 的疑问句
-- 以 `what`、`why`、`how`、`compare`、`explain`、`summarize`、`tell me` 开头的问题
+- Questions containing `?`
+- Questions starting with `what`, `why`, `how`, `compare`, `explain`, `summarize`, `tell me`
 
 ---
 
-## 配置选项
+## Configuration Options
 
-### 完整配置示例
+### Complete Configuration Example
 
 ```toml
 [wiki]
@@ -314,163 +313,163 @@ autoQueryEnabled = true
 supportedFormats = ["pdf", "docx", "md", "txt", "csv"]
 ```
 
-### 配置项说明
+### Configuration Options Reference
 
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `enabled` | boolean | `false` | 是否启用 Wiki 插件 |
-| `repoRoot` | string | `""` | 知识库根目录路径，空则使用插件存储目录 |
-| `autoQueryEnabled` | boolean | `true` | 是否启用自动查询增强 |
-| `supportedFormats` | string[] | `["pdf", "docx", "md", "txt", "csv"]` | 支持的文件格式 |
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `enabled` | boolean | `false` | Whether to enable Wiki plugin |
+| `repoRoot` | string | `""` | Knowledge base root directory path, empty means use plugin storage directory |
+| `autoQueryEnabled` | boolean | `true` | Whether to enable automatic query enhancement |
+| `supportedFormats` | string[] | `["pdf", "docx", "md", "txt", "csv"]` | Supported file formats |
 
 ---
 
-## 使用工作流
+## Usage Workflows
 
-### 工作流 1：快速建立个人知识库
+### Workflow 1: Quick Personal Knowledge Base Setup
 
 ```bash
-# 1. 初始化知识库
+# 1. Initialize knowledge base
 /wiki init ~/my-knowledge
 
-# 2. 采集常用参考资料
+# 2. Ingest common reference materials
 /wiki https://docs.python.org/3/tutorial/
 /wiki add ~/Documents/cheatsheet.pdf
 /wiki https://arxiv.org/abs/2305.12345
 
-# 3. 查看采集状态
+# 3. Check ingestion status
 /wiki status
 /wiki list
 
-# 4. 使用知识增强对话
+# 4. Use knowledge-enhanced conversation
 /wiki use prefer-local
-# 现在每次对话都会自动检索相关知识
+# Now every conversation will automatically retrieve relevant knowledge
 ```
 
-### 工作流 2：研究项目知识管理
+### Workflow 2: Research Project Knowledge Management
 
 ```bash
-# 1. 为项目创建专用知识库
+# 1. Create dedicated knowledge base for project
 /wiki init ./project-wiki
 
-# 2. 批量导入相关论文和文档
+# 2. Batch import related papers and documents
 /wiki add ./papers/*.pdf
 /wiki add ./notes/*.md
 
-# 3. 确保所有内容已处理
+# 3. Ensure all content is processed
 /wiki digest
 
-# 4. 查看知识图谱
+# 4. View knowledge graph
 /wiki map
 
-# 5. 严格使用本地知识进行研究
+# 5. Strictly use local knowledge for research
 /wiki use local-only
-# 询问与论文相关的问题
+# Ask questions related to papers
 ```
 
-### 工作流 3：自动附件采集
+### Workflow 3: Automatic Attachment Ingestion
 
 ```bash
-# 1. 开启自动附件采集
+# 1. Enable automatic attachment ingestion
 /wiki attach on
 
-# 2. 发送文件到会话中（如通过 Telegram）
-# 文件会自动导入 Wiki 并生成摘要
+# 2. Send files to session (e.g., via Telegram)
+# Files are automatically imported into Wiki and summarized
 
-# 3. 查看导入结果
+# 3. View import results
 /wiki list
 
-# 4. 查看生成的摘要
+# 4. View generated summaries
 /wiki get summary:document-name
 ```
 
 ---
 
-## 架构设计
+## Architecture Design
 
-### 服务架构
+### Service Architecture
 
 ```
 ┌─────────────────────────────────────────┐
-│ 命令层 (Command Layer)                  │
-│  /wiki 命令路由和参数解析                 │
+│ Command Layer                           │
+│  /wiki command routing and parameter parsing
 ├─────────────────────────────────────────┤
-│ 服务层 (Service Layer)                  │
-│  - RepoService: 知识库结构管理           │
-│  - ManifestService: 源和条目跟踪         │
-│  - IngestService: 内容采集处理           │
-│  - DigestService: 摘要生成               │
-│  - QueryService: 知识查询检索            │
-│  - UsageModeStore: 会话使用模式          │
+│ Service Layer                           │
+│  - RepoService: Knowledge base structure management
+│  - ManifestService: Source and entry tracking
+│  - IngestService: Content ingestion processing
+│  - DigestService: Summarization generation
+│  - QueryService: Knowledge query retrieval
+│  - UsageModeStore: Session usage mode
 ├─────────────────────────────────────────┤
-│ 中间件层 (Middleware Layer)             │
-│  WikiQueryMiddleware: 对话增强注入       │
+│ Middleware Layer                        │
+│  WikiQueryMiddleware: Conversation enhancement injection
 ├─────────────────────────────────────────┤
-│ 存储层 (Storage Layer)                  │
-│  原始内容 / 结构化条目 / 元数据           │
+│ Storage Layer                           │
+│  Raw content / Structured entries / Metadata
 └─────────────────────────────────────────┘
 ```
 
-### 数据流
+### Data Flow
 
 ```
-外部内容
+External Content
     ↓
-[IngestService] 采集 → raw/
+[IngestService] Ingest → raw/
     ↓
-[DigestService] 摘要 → wiki/
+[DigestService] Summarize → wiki/
     ↓
-[QueryService] 索引 → 可查询
+[QueryService] Index → Queryable
     ↓
-[WikiQueryMiddleware] 增强 → 对话上下文
+[WikiQueryMiddleware] Enhance → Conversation Context
 ```
 
-### 核心服务职责
+### Core Service Responsibilities
 
-| 服务 | 职责 |
-|------|------|
-| **RepoService** | 管理知识库目录结构，提供路径解析和状态查询 |
-| **ManifestService** | 维护 `manifest.json`，跟踪所有源和生成的页面 |
-| **IngestService** | 处理 URL 下载、文件复制、格式识别、重复检测 |
-| **DigestService** | 调用 LLM 分析原始内容，生成领域/摘要/概念页面 |
-| **QueryService** | 提供条目检索、关系图谱、证据格式化 |
-| **WikiQueryMiddleware** | 拦截 LLM 调用，根据查询自动注入相关知识 |
+| Service | Responsibility |
+|---------|----------------|
+| **RepoService** | Manage knowledge base directory structure, provide path resolution and status queries |
+| **ManifestService** | Maintain `manifest.json`, track all sources and generated pages |
+| **IngestService** | Handle URL downloads, file copying, format recognition, duplicate detection |
+| **DigestService** | Call LLM to analyze raw content, generate domain/summary/concept pages |
+| **QueryService** | Provide entry retrieval, relationship graphs, evidence formatting |
+| **WikiQueryMiddleware** | Intercept LLM calls, automatically inject relevant knowledge based on queries |
 
-### 中间件工作方式
+### Middleware Operation
 
-1. **消息捕获**：通过 `MESSAGE_RECEIVED` Hook 捕获会话上下文
-2. **查询识别**：从用户消息中提取最新查询文本
-3. **模式判断**：根据当前会话的使用模式决定是否增强
-4. **知识检索**：调用 QueryService 搜索相关证据
-5. **上下文注入**：将证据块注入系统消息，供 LLM 使用
+1. **Message Capture**: Capture session context through `MESSAGE_RECEIVED` Hook
+2. **Query Recognition**: Extract latest query text from user messages
+3. **Mode Judgment**: Decide whether to enhance based on current session usage mode
+4. **Knowledge Retrieval**: Call QueryService to search for relevant evidence
+5. **Context Injection**: Inject evidence blocks into system messages for LLM use
 
-### 证据块格式
+### Evidence Block Format
 
-当 Wiki 找到相关知识时，会注入如下格式的上下文：
+When Wiki finds relevant knowledge, it injects context in the following format:
 
 ```markdown
 ## Wiki Evidence
 
-### [条目标题]
+### [Entry Title]
 - entry: `entry-id`
 - score: 85
 
-摘要内容...
+Summary content...
 
 ### Related
-- `related-entry-1`: 描述
-- `related-entry-2`: 描述
+- `related-entry-1`: description
+- `related-entry-2`: description
 ```
 
 ---
 
-## 模板规范
+## Template Specification
 
-Wiki 使用 `WIKI_HARNESS.md` 作为知识库使用规范，所有生成的页面遵循以下约定：
+Wiki uses `WIKI_HARNESS.md` as the knowledge base usage guideline. All generated pages follow these conventions:
 
-- `raw/` 是输入目录，不作为答案表面
-- `wiki/summaries/` 包含源级摘要
-- `wiki/concepts/` 包含跨源概念
-- `wiki/domains/` 包含领域组织页面
-- 摘要和概念页面声明 `primary_domain`，可声明额外的 `domain_refs`
-- `state/manifest.json` 是跟踪源和派生页面的唯一真相源
+- `raw/` is the input directory, not surfaced as answers
+- `wiki/summaries/` contains source-level summaries
+- `wiki/concepts/` contains cross-source concepts
+- `wiki/domains/` contains domain organization pages
+- Summary and concept pages declare `primary_domain`, can declare additional `domain_refs`
+- `state/manifest.json` is the single source of truth for tracking sources and derived pages

@@ -238,39 +238,15 @@ Hook 类型：
 **方法**：
 - `process_direct(content, **kwargs)`: 委托给 Agent 流水线
 
-### CommandContext
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `session_key` | `str` | 会话标识 |
-| `channel` | `str` | 渠道名称（cli/telegram 等） |
-| `reply` | `async (str) -> None` | 发送中间回复 |
-| `send_progress` | `async (str, **kwargs) -> None` | 发送进度更新 |
-| `plugin_config` | `Mapping` | 插件专属配置 |
-
-### PluginManifest (清单模型)
-
-| 字段 | 必需 | 说明 |
-|------|------|------|
-| `id` | 是 | 反向 DNS 标识符（必须含 `.`） |
-| `name` | 是 | 可读名称 |
-| `version` | 是 | 语义化版本 |
-| `entry` | 是 | `module:ClassName` 格式 |
-| `description` | 否 | 简短描述 |
-| `author` | 否 | 作者 |
-| `provides` | 否 | 提供的命令、工具、服务等 |
-| `requires` | 否 | 依赖的 Aeloon 版本、插件等 |
-
----
-
 ## 插件专属指南
 
 | 插件 | 指南 | 说明 |
 |------|------|------|
 | **ScienceResearch** | [`README-SR.md`](ScienceResearch/README-SR.md) | AI4S 科研任务插件完整指南 |
-| **Wiki** | [`README.md`](Wiki/README.md) | 本地知识库管理插件完整指南 |
-| **ACP Bridge** | [`README.md`](acp_bridge/README.md) | ACP 协议桥接：连接外部智能体服务器 |
+| **Wiki** | [`README-wiki.md`](Wiki/README-wiki.md) | 本地知识库管理插件完整指南 |
+| **ACP Bridge** | [`README-ACP.md`](acp_bridge/README-ACP.md) | ACP 协议桥接：连接外部智能体服务器 |
 | **PluginCreator** | [`README-PC.md`](PluginCreator/README-PC.md) | 插件开发工作流智能规划器完整指南 |
+| **SkillGraph** | [`README-SG.md`](SkillGraph/README-SG.md) | Skill 编译器：将 SKILL.md 编译为可运行的 Python 产物 |
 
 专属指南包含：架构详解、运行时流程、数据模型、运维配置、扩展模式。
 
@@ -279,5 +255,5 @@ Hook 类型：
 ## 资源
 
 - **SDK 源码**：`aeloon/plugins/_sdk/`
-- **内置示例**：`ScienceResearch/`、`SoftwareEngineering/`、`market/`、`fs/`
+- **内置示例**：`ScienceResearch/`, `Wiki/`, `StatusPannel/`,`SkillGraph`,`PluginCreator`
 - **测试**：`tests/test_plugin_sdk.py`

@@ -238,38 +238,16 @@ Plugins can contribute status segments to the bottom status bar, need to synchro
 **Methods**:
 - `process_direct(content, **kwargs)`: Delegate to Agent pipeline
 
-### CommandContext
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `session_key` | `str` | Session identifier |
-| `channel` | `str` | Channel name (cli/telegram, etc.) |
-| `reply` | `async (str) -> None` | Send intermediate reply |
-| `send_progress` | `async (str, **kwargs) -> None` | Send progress update |
-| `plugin_config` | `Mapping` | Plugin-specific configuration |
-
-### PluginManifest (Manifest Model)
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `id` | Yes | Reverse DNS identifier (must contain `.`) |
-| `name` | Yes | Human-readable name |
-| `version` | Yes | Semantic version |
-| `entry` | Yes | Format as `module:ClassName` |
-| `description` | No | Short description |
-| `author` | No | Author |
-| `provides` | No | Commands, tools, services provided |
-| `requires` | No | Dependencies on Aeloon version, plugins, etc. |
-
 ---
 
 ## Plugin-Specific Guides
 | Plugin | Guide | Description |
 |--------|-------|-------------|
-| **ScienceResearch** | [`README-SR.md`](ScienceResearch/README-SR.md) | Complete guide for AI4S scientific research task plugin |
+| **ScienceResearch** | [`README.md`](ScienceResearch/README.md) | Complete guide for AI4S scientific research task plugin |
 | **Wiki** | [`README.md`](Wiki/README.md) | Complete guide for local knowledge base management plugin |
 | **ACP Bridge** | [`README.md`](acp_bridge/README.md) | ACP protocol bridge: connect to external agent servers |
 | **PluginCreator** | [`README-PC.md`](PluginCreator/README-PC.md) | Complete guide for plugin development workflow planner |
+| **SkillGraph** | [`README.md`](SkillGraph/README.md) | Skill compiler: compile SKILL.md into runnable Python artifacts |
 
 Specific guides include: detailed architecture, runtime flow, data models, operational configuration, and extension patterns.
 
@@ -278,5 +256,5 @@ Specific guides include: detailed architecture, runtime flow, data models, opera
 ## Resources
 
 - **SDK Source Code**: `aeloon/plugins/_sdk/`
-- **Built-in Examples**: `ScienceResearch/`, `market/`, `fs/`
+- **Built-in Examples**: `ScienceResearch/`, `Wiki/`, `StatusPannel/`,`SkillGraph`,`PluginCreator`
 - **Tests**: `tests/test_plugin_sdk.py`
