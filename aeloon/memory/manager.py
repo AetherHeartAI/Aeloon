@@ -21,6 +21,7 @@ class MemoryManager:
         raw_cfg = memory_config.backends.get(memory_config.backend, {})
         self.backend = build_backend(memory_config.backend, raw_cfg, deps)
         self._background_tasks: list[asyncio.Task[None]] = []
+        self._closing = False
 
     @classmethod
     def from_backend(cls, backend: MemoryBackend) -> "MemoryManager":
@@ -28,6 +29,7 @@ class MemoryManager:
         manager = cls.__new__(cls)
         manager.backend = backend
         manager._background_tasks = []
+        manager._closing = False
         return manager
 
     async def prepare_turn(
@@ -98,13 +100,17 @@ class MemoryManager:
 
     async def close(self) -> None:
         """Drain pending backend work before closing the backend."""
-        if self._background_tasks:
+        self._closing = True
+        while self._background_tasks:
             pending = list(self._background_tasks)
             await asyncio.gather(*pending, return_exceptions=True)
             self._background_tasks = [task for task in self._background_tasks if not task.done()]
         await self.backend.close()
 
     def _track_task(self, coro: Coroutine[object, object, None]) -> None:
+        if self._closing:
+            coro.close()
+            raise RuntimeError("Memory manager is closing")
         task = asyncio.create_task(coro)
         self._background_tasks.append(task)
         task.add_done_callback(self._remove_task)
@@ -113,6 +119,7 @@ class MemoryManager:
         try:
             exc = task.exception()
         except asyncio.CancelledError:
+            # Cancellation during shutdown is expected and should not be logged as an error.
             exc = None
         if exc is not None:
             logger.opt(exception=exc).error("Memory backend background task failed")

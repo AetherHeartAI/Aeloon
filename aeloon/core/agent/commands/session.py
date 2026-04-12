@@ -38,14 +38,14 @@ async def handle_new(env: CommandEnv, msg: InboundMessage, _args_str: str) -> Ou
                 OutboundMessage(
                     channel=msg.channel,
                     chat_id=msg.chat_id,
-                    content="Archiving previous session history...",
+                    content="Archiving previous session history in the background...",
                     metadata={
                         **(msg.metadata or {}),
                         "_progress": True,
                     },
                 )
             )
-        await env.memory.run_new_session(
+        await env.memory.on_new_session(
             session=session,
             pending_messages=snapshot,
         )
