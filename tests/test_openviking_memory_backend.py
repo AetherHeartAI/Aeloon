@@ -296,7 +296,9 @@ def _install_fake_runtime(monkeypatch: pytest.MonkeyPatch):
     config_singleton = FakeOpenVikingConfigSingleton()
     runtime = openviking_module.OpenVikingRuntime(
         async_openviking_cls=cast(openviking_module.OpenVikingClientFactoryProtocol, factory),
-        config_singleton=cast(openviking_module.OpenVikingConfigSingletonProtocol, config_singleton),
+        config_singleton=cast(
+            openviking_module.OpenVikingConfigSingletonProtocol, config_singleton
+        ),
     )
     monkeypatch.setattr(openviking_module, "_load_openviking_runtime", lambda: runtime)
     return factory, config_singleton
@@ -702,7 +704,9 @@ async def test_openviking_backend_injects_quiet_log_defaults_without_overriding_
         }
     )
 
-    explicit_manager = MemoryManager(memory_config=explicit_config.memory, deps=_make_deps(tmp_path))
+    explicit_manager = MemoryManager(
+        memory_config=explicit_config.memory, deps=_make_deps(tmp_path)
+    )
     await explicit_manager.prepare_turn(
         session=Session(key="cli:explicit"),
         query="hello",
@@ -1023,7 +1027,9 @@ async def test_openviking_prepare_turn_merges_multi_target_search_results_by_hig
         "viking://user/default/memories/",
         "viking://session/default",
     ]
-    assert all(call["session_id"] == "aeloon-live-cli_test" for call in factory.clients[0].search_calls)
+    assert all(
+        call["session_id"] == "aeloon-live-cli_test" for call in factory.clients[0].search_calls
+    )
     assert "higher score copy" in prepared.system_sections[0]
     assert "lower score copy" not in prepared.system_sections[0]
 

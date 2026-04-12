@@ -43,7 +43,6 @@ def test_backend_registry_registers_and_builds_backend(tmp_path: Path) -> None:
     from aeloon.memory.base import (
         MemoryBackend,
         MemoryBackendConfig,
-        MemoryBackendDeps,
         PreparedMemoryContext,
     )
     from aeloon.memory.registry import build_backend, register_backend, resolve_backend_class
@@ -141,7 +140,6 @@ def test_memory_backend_defaults_hidden_skill_names_to_empty_list(tmp_path: Path
     from aeloon.memory.base import (
         MemoryBackend,
         MemoryBackendConfig,
-        MemoryBackendDeps,
         PreparedMemoryContext,
     )
 
@@ -180,7 +178,6 @@ def test_memory_backend_pending_start_index_requires_override(tmp_path: Path) ->
     from aeloon.memory.base import (
         MemoryBackend,
         MemoryBackendConfig,
-        MemoryBackendDeps,
         PreparedMemoryContext,
     )
 

@@ -60,11 +60,7 @@ _TOOL_CHOICE_ERROR_MARKERS = (
 
 
 def _ensure_text(value: object) -> str:
-    return (
-        value
-        if isinstance(value, str)
-        else json.dumps(value, ensure_ascii=False, default=str)
-    )
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
 
 
 def _normalize_save_memory_args(args: object) -> dict[str, object] | None:
@@ -123,9 +119,7 @@ class MemoryStore:
             tools = f" [tools: {', '.join(tools_used)}]" if isinstance(tools_used, list) else ""
             timestamp = message.get("timestamp")
             role = str(message.get("role", "?")).upper()
-            lines.append(
-                f"[{str(timestamp or '?')[:16]}] {role}{tools}: {message['content']}"
-            )
+            lines.append(f"[{str(timestamp or '?')[:16]}] {role}{tools}: {message['content']}")
         return "\n".join(lines)
 
     async def consolidate(

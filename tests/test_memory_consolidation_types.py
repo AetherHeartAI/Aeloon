@@ -11,8 +11,8 @@ from pydantic import ValidationError
 
 from aeloon.core.agent.memory import MemoryConsolidator, MemoryStore
 from aeloon.core.session.manager import Session, SessionManager
-from aeloon.memory.base import MemoryBackendDeps
 from aeloon.memory.backends.file import FileMemoryConfig
+from aeloon.memory.base import MemoryBackendDeps
 from aeloon.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 

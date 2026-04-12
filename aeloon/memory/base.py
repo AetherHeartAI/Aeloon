@@ -86,9 +86,7 @@ class MemoryBackend(ABC):
 
     def pending_start_index(self, session: object) -> int:
         """Return the first still-pending message index for /new archival."""
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement pending_start_index()"
-        )
+        raise NotImplementedError(f"{type(self).__name__} must implement pending_start_index()")
 
     async def on_new_session(
         self,

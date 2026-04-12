@@ -135,7 +135,9 @@ class _LazyOpenVikingConfigSingleton:
 
     def _load(self) -> OpenVikingConfigSingletonProtocol:
         if self._singleton is None:
-            config_module = importlib.import_module("openviking_cli.utils.config.open_viking_config")
+            config_module = importlib.import_module(
+                "openviking_cli.utils.config.open_viking_config"
+            )
             self._singleton = cast(
                 OpenVikingConfigSingletonProtocol,
                 getattr(config_module, "OpenVikingConfigSingleton"),
@@ -174,9 +176,10 @@ class _LazyOpenVikingClientFactory:
 
 
 def _load_openviking_runtime() -> OpenVikingRuntime:
-    if importlib.util.find_spec("openviking") is None or importlib.util.find_spec(
-        "openviking_cli"
-    ) is None:
+    if (
+        importlib.util.find_spec("openviking") is None
+        or importlib.util.find_spec("openviking_cli") is None
+    ):
         raise ImportError("OpenViking runtime is not installed")
     return OpenVikingRuntime(
         async_openviking_cls=_LazyOpenVikingClientFactory(),
@@ -406,7 +409,9 @@ class OpenVikingMemoryBackend(MemoryBackend):
                         continue
                     existing_score = self._context_score(existing)
                     current_score = self._context_score(context)
-                    resolved_existing = existing_score if existing_score is not None else float("-inf")
+                    resolved_existing = (
+                        existing_score if existing_score is not None else float("-inf")
+                    )
                     resolved_current = current_score if current_score is not None else float("-inf")
                     if resolved_current > resolved_existing:
                         bucket[key] = context

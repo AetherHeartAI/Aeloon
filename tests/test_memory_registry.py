@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -80,8 +79,12 @@ def _make_deps(tmp_path: Path) -> MemoryBackendDeps:
 def test_memory_public_api_exports_registration_symbols() -> None:
     from aeloon.memory import (
         InvalidMemoryBackendClassError as ExportedInvalidMemoryBackendClassError,
+    )
+    from aeloon.memory import (
         MissingMemoryBackendDependencyError,
         UnknownMemoryBackendError,
+    )
+    from aeloon.memory import (
         register_backend as exported_register_backend,
     )
 

@@ -41,9 +41,7 @@ def resolve_backend_class(name: str, raw_cfg: Mapping[str, object]) -> type[Memo
     if class_path is not None:
         module_name, _, attr_name = class_path.rpartition(".")
         if not module_name or not attr_name:
-            raise InvalidMemoryBackendClassError(
-                f"Invalid memory backend class path: {class_path}"
-            )
+            raise InvalidMemoryBackendClassError(f"Invalid memory backend class path: {class_path}")
         module = importlib.import_module(module_name)
         return _validate_backend_class(getattr(module, attr_name))
 
