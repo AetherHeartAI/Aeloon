@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -301,6 +302,49 @@ def _install_fake_runtime(monkeypatch: pytest.MonkeyPatch):
     return factory, config_singleton
 
 
+def _openviking_backend_settings(
+    *,
+    search_mode: str = "search",
+    recall_timeout_s: float | None = None,
+    wait_processed_timeout_s: float | None = None,
+) -> dict[str, object]:
+    openviking: dict[str, object] = {
+        "ovConfig": {
+            "storage": {"agfs": {"port": 1833}},
+            "embedding": {"dense": {"provider": "mock"}},
+        },
+        "searchMode": search_mode,
+    }
+    if recall_timeout_s is not None:
+        openviking["recallTimeoutS"] = recall_timeout_s
+    if wait_processed_timeout_s is not None:
+        openviking["waitProcessedTimeoutS"] = wait_processed_timeout_s
+    return openviking
+
+
+def _openviking_config(
+    *,
+    search_mode: str = "search",
+    recall_timeout_s: float | None = None,
+    wait_processed_timeout_s: float | None = None,
+) -> Config:
+    return Config.model_validate(
+        {
+            "memory": {
+                "backend": "openviking",
+                "backends": {
+                    "file": {},
+                    "openviking": _openviking_backend_settings(
+                        search_mode=search_mode,
+                        recall_timeout_s=recall_timeout_s,
+                        wait_processed_timeout_s=wait_processed_timeout_s,
+                    ),
+                },
+            }
+        }
+    )
+
+
 def test_openviking_config_rejects_non_leaf_storage_subdir() -> None:
     from aeloon.memory.backends.openviking import OpenVikingMemoryConfig
 
@@ -345,6 +389,114 @@ def test_openviking_config_normalizes_extra_target_uris() -> None:
         "viking://session/default",
         "viking://session/default/archive",
     ]
+
+
+def test_openviking_backend_uses_plain_lock_map(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from aeloon.memory.backends.openviking import OpenVikingMemoryBackend, OpenVikingMemoryConfig
+
+    _install_fake_runtime(monkeypatch)
+    backend = OpenVikingMemoryBackend(
+        OpenVikingMemoryConfig.model_validate(_openviking_backend_settings()),
+        _make_deps(tmp_path),
+    )
+    lock = backend._get_lock("cli:test")
+
+    assert isinstance(backend._locks, dict)
+    assert backend._get_lock("cli:test") is lock
+
+
+@pytest.mark.asyncio
+async def test_openviking_ensure_client_initializes_once_under_concurrency(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from aeloon.memory.backends.openviking import OpenVikingMemoryBackend, OpenVikingMemoryConfig
+
+    factory, _ = _install_fake_runtime(monkeypatch)
+    release_initialize = asyncio.Event()
+
+    async def _blocking_initialize(self: FakeOpenVikingClient) -> None:
+        await release_initialize.wait()
+        self.initialized = True
+
+    monkeypatch.setattr(FakeOpenVikingClient, "initialize", _blocking_initialize)
+    backend = OpenVikingMemoryBackend(
+        OpenVikingMemoryConfig.model_validate(_openviking_backend_settings()),
+        _make_deps(tmp_path),
+    )
+
+    first_task = asyncio.create_task(backend._ensure_client())
+    await asyncio.sleep(0)
+    second_task = asyncio.create_task(backend._ensure_client())
+    await asyncio.sleep(0)
+    release_initialize.set()
+    first, second = await asyncio.gather(first_task, second_task)
+
+    assert first is second
+    assert len(factory.clients) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("search_mode", ["search", "find"])
+async def test_openviking_recall_passes_configured_timeout_to_wait_for(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    search_mode: str,
+) -> None:
+    from aeloon.memory.backends import openviking as openviking_module
+    from aeloon.memory.manager import MemoryManager
+
+    recorded: list[float] = []
+
+    async def _record_wait_for(awaitable: Awaitable[object], timeout: float) -> object:
+        recorded.append(timeout)
+        return await awaitable
+
+    _install_fake_runtime(monkeypatch)
+    monkeypatch.setattr(openviking_module.asyncio, "wait_for", _record_wait_for)
+    manager = MemoryManager(
+        memory_config=_openviking_config(
+            search_mode=search_mode,
+            recall_timeout_s=12.5,
+        ).memory,
+        deps=_make_deps(tmp_path),
+    )
+
+    await manager.prepare_turn(
+        session=Session(key="cli:test"),
+        query="hello",
+        channel="cli",
+        chat_id="direct",
+        current_role="user",
+    )
+
+    assert recorded == [12.5]
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_openviking_new_session_passes_wait_processed_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from aeloon.memory.manager import MemoryManager
+
+    factory, _ = _install_fake_runtime(monkeypatch)
+    manager = MemoryManager(
+        memory_config=_openviking_config(wait_processed_timeout_s=18.0).memory,
+        deps=_make_deps(tmp_path),
+    )
+
+    await manager.on_new_session(
+        session=Session(key="cli:test"),
+        pending_messages=[{"role": "user", "content": "pending"}],
+    )
+    await manager.close()
+
+    assert factory.clients[0].wait_processed_calls == [18.0]
 
 
 def test_openviking_backend_missing_dependency_raises_actionable_error(
@@ -1417,7 +1569,7 @@ async def test_openviking_prepare_turn_archives_old_history_and_rebuilds_live_se
     assert session.memory_state["openviking"]["archivedThrough"] == 2
     assert client.commit_session_calls
     assert client.commit_session_calls[0].startswith("aeloon-archive-cli_test")
-    assert client.wait_processed_calls == [None]
+    assert client.wait_processed_calls == [30.0]
     assert live_session_id in client.delete_session_calls
     assert client.sessions[live_session_id].messages == [
         ("user", "u2 " * 120),
@@ -1485,7 +1637,7 @@ async def test_openviking_new_session_archives_pending_slice_and_resets_live_ses
     assert second_client.commit_session_calls
     archive_session_id = second_client.commit_session_calls[0]
     assert archive_session_id.startswith("aeloon-archive-cli_test")
-    assert second_client.wait_processed_calls == [None]
+    assert second_client.wait_processed_calls == [30.0]
     assert live_session_id in second_client.delete_session_calls
     assert session.memory_state == {}
 

@@ -7,7 +7,6 @@ import copy
 import importlib
 import importlib.util
 import json
-import weakref
 from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha1
@@ -205,6 +204,12 @@ class OpenVikingMemoryConfig(MemoryBackendConfig):
     trigger_ratio: float = Field(default=1.0, alias="triggerRatio")
     target_ratio: float = Field(default=0.5, alias="targetRatio")
     max_commit_rounds: int = Field(default=5, alias="maxCommitRounds", ge=1)
+    recall_timeout_s: float = Field(default=20.0, alias="recallTimeoutS", gt=0)
+    wait_processed_timeout_s: float = Field(
+        default=30.0,
+        alias="waitProcessedTimeoutS",
+        gt=0,
+    )
 
     @field_validator("storage_subdir")
     @classmethod
@@ -277,7 +282,8 @@ class OpenVikingMemoryBackend(MemoryBackend):
         self._build_messages = deps.build_messages
         self._get_tool_definitions = deps.get_tool_definitions
         self._client: OpenVikingClientProtocol | None = None
-        self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+        self._client_init_lock = asyncio.Lock()
+        self._locks: dict[str, asyncio.Lock] = {}
 
     def _get_lock(self, session_key: str) -> asyncio.Lock:
         return self._locks.setdefault(session_key, asyncio.Lock())
@@ -301,13 +307,17 @@ class OpenVikingMemoryBackend(MemoryBackend):
         if self._client is not None:
             return self._client
 
-        inline_config = self._prepare_inline_config()
-        self.storage_root.mkdir(parents=True, exist_ok=True)
-        self.runtime.config_singleton.initialize(config_dict=inline_config)
-        client = self.runtime.async_openviking_cls(path=str(self.storage_root))
-        await client.initialize()
-        self._client = client
-        return client
+        async with self._client_init_lock:
+            if self._client is not None:
+                return self._client
+
+            inline_config = self._prepare_inline_config()
+            self.storage_root.mkdir(parents=True, exist_ok=True)
+            self.runtime.config_singleton.initialize(config_dict=inline_config)
+            client = self.runtime.async_openviking_cls(path=str(self.storage_root))
+            await client.initialize()
+            self._client = client
+            return client
 
     def _live_session_id(self, session_key: str) -> str:
         return f"aeloon-live-{session_key.replace(':', '_')}"
@@ -357,18 +367,24 @@ class OpenVikingMemoryBackend(MemoryBackend):
         session_id: str | None,
     ) -> object:
         if self.config.search_mode == "find":
-            return await client.find(
+            return await asyncio.wait_for(
+                client.find(
+                    query=query,
+                    target_uri=target_uri,
+                    limit=self.config.search_limit,
+                    score_threshold=self.config.score_threshold,
+                ),
+                timeout=self.config.recall_timeout_s,
+            )
+        return await asyncio.wait_for(
+            client.search(
                 query=query,
                 target_uri=target_uri,
+                session_id=session_id,
                 limit=self.config.search_limit,
                 score_threshold=self.config.score_threshold,
-            )
-        return await client.search(
-            query=query,
-            target_uri=target_uri,
-            session_id=session_id,
-            limit=self.config.search_limit,
-            score_threshold=self.config.score_threshold,
+            ),
+            timeout=self.config.recall_timeout_s,
         )
 
     def _merge_recall_results(self, results: list[object]) -> "OpenVikingRecallBuckets":
@@ -719,7 +735,7 @@ class OpenVikingMemoryBackend(MemoryBackend):
         archive_session_id = self._archive_session_id(session.key, chunk)
         await self._replace_session_messages(client, archive_session_id, chunk)
         await client.commit_session(archive_session_id)
-        await client.wait_processed()
+        await client.wait_processed(timeout=self.config.wait_processed_timeout_s)
         await self._replace_session_messages(
             client, state["liveSessionId"], session.messages[end_index:]
         )
@@ -848,7 +864,7 @@ class OpenVikingMemoryBackend(MemoryBackend):
                 archive_session_id = self._archive_session_id(session_key, pending_messages)
                 await self._replace_session_messages(client, archive_session_id, pending_messages)
                 await client.commit_session(archive_session_id)
-                await client.wait_processed()
+                await client.wait_processed(timeout=self.config.wait_processed_timeout_s)
             await client.delete_session(self._live_session_id(session_key))
         return None
 

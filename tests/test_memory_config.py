@@ -74,6 +74,8 @@ def test_save_and_load_round_trip_openviking_memory_config(tmp_path) -> None:
                         "scoreThreshold": 0.25,
                         "targetUri": "viking://memory/",
                         "extraTargetUris": ["viking://session/default"],
+                        "recallTimeoutS": 12.5,
+                        "waitProcessedTimeoutS": 18.0,
                         "triggerRatio": 0.8,
                         "targetRatio": 0.4,
                         "maxCommitRounds": 3,
@@ -94,6 +96,8 @@ def test_save_and_load_round_trip_openviking_memory_config(tmp_path) -> None:
     assert openviking["storageSubdir"] == "openviking_memory"
     assert openviking["searchMode"] == "search"
     assert openviking["extraTargetUris"] == ["viking://session/default"]
+    assert openviking["recallTimeoutS"] == 12.5
+    assert openviking["waitProcessedTimeoutS"] == 18.0
     assert openviking["ovConfig"]["storage"]["agfs"]["port"] == 1833
 
     loaded = load_config(config_path)
@@ -101,6 +105,8 @@ def test_save_and_load_round_trip_openviking_memory_config(tmp_path) -> None:
     assert loaded.memory.backends["openviking"]["searchMode"] == "search"
     assert loaded.memory.backends["openviking"]["searchLimit"] == 6
     assert loaded.memory.backends["openviking"]["extraTargetUris"] == ["viking://session/default"]
+    assert loaded.memory.backends["openviking"]["recallTimeoutS"] == 12.5
+    assert loaded.memory.backends["openviking"]["waitProcessedTimeoutS"] == 18.0
     loaded_ov_config = cast(dict[str, object], loaded.memory.backends["openviking"]["ovConfig"])
     loaded_embedding = cast(dict[str, object], loaded_ov_config["embedding"])
     loaded_dense = cast(dict[str, object], loaded_embedding["dense"])
