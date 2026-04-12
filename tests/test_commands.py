@@ -109,9 +109,10 @@ def mock_paths():
             shutil.rmtree(base_dir)
 
 
-def test_onboard_fresh_install(mock_paths):
+def test_onboard_fresh_install(mock_paths, monkeypatch) -> None:
     """No existing config — should create from scratch."""
     config_file, workspace_dir, mock_ws = mock_paths
+    monkeypatch.setattr("aeloon.channels.registry.discover_all", lambda: {})
 
     result = runner.invoke(app, ["onboard"])
 
@@ -124,7 +125,34 @@ def test_onboard_fresh_install(mock_paths):
     assert (workspace_dir / "compiled_skills").exists()
     assert (workspace_dir / "memory" / "MEMORY.md").exists()
     assert (workspace_dir / "outputs").exists()
+    saved = Config.model_validate(json.loads(config_file.read_text(encoding="utf-8")))
+    raw_saved = json.loads(config_file.read_text(encoding="utf-8"))
+    openviking = raw_saved["memory"]["backends"]["openviking"]
+    dense = openviking["ovConfig"]["embedding"]["dense"]
     expected_workspace = Config().workspace_path
+    stripped_output = _strip_ansi(result.stdout).lower()
+
+    assert saved.memory.backend == "file"
+    assert "file" in saved.memory.backends
+    assert "openviking" in saved.memory.backends
+    assert openviking["ovConfig"]["storage"] == {}
+    assert openviking["ovConfig"]["vlm"] == {"provider": "", "api_key": "", "model": ""}
+    assert dense["provider"] == ""
+    assert dense["api_key"] == ""
+    assert dense["model"] == ""
+    assert dense["dimension"] == 1024
+    assert dense["input"] == "multimodal"
+    assert openviking["searchMode"] == "search"
+    assert openviking["searchLimit"] == 3
+    assert openviking["scoreThreshold"] is None
+    assert openviking["targetUri"] == "viking://user/default/memories/"
+    assert openviking["extraTargetUris"] == []
+    assert openviking["maxCommitRounds"] == 5
+    assert openviking["recallTimeoutS"] == 20.0
+    assert openviking["waitProcessedTimeoutS"] == 30.0
+    assert "memory backends:" in stripped_output
+    assert "file" in stripped_output
+    assert "openviking" in stripped_output
     assert mock_ws.call_args.args == (expected_workspace,)
 
 
@@ -206,6 +234,88 @@ def test_onboard_uses_explicit_config_and_workspace_paths(tmp_path, monkeypatch)
     resolved_config = str(config_path.resolve())
     assert resolved_config in compact_output
     assert f"--config {resolved_config}" in compact_output
+
+
+def test_onboard_refresh_adds_openviking_template_without_changing_default(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = tmp_path / "config.json"
+    workspace_path = tmp_path / "workspace"
+    config_path.write_text(
+        json.dumps(
+            {
+                "memory": {
+                    "backend": "file",
+                    "backends": {
+                        "file": {},
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("aeloon.channels.registry.discover_all", lambda: {})
+
+    result = runner.invoke(
+        app,
+        ["onboard", "--config", str(config_path), "--workspace", str(workspace_path)],
+        input="n\n",
+    )
+
+    assert result.exit_code == 0
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    openviking = saved["memory"]["backends"]["openviking"]
+    stripped_output = _strip_ansi(result.stdout).lower()
+
+    assert saved["memory"]["backend"] == "file"
+    assert saved["memory"]["backends"]["file"] == {}
+    assert openviking["ovConfig"]["storage"] == {}
+    assert openviking["searchMode"] == "search"
+    assert openviking["recallTimeoutS"] == 20.0
+    assert openviking["waitProcessedTimeoutS"] == 30.0
+    assert "openviking" in stripped_output
+    assert (workspace_path / "memory" / "MEMORY.md").exists()
+
+
+def test_onboard_refresh_preserves_existing_openviking_config(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = tmp_path / "config.json"
+    workspace_path = tmp_path / "workspace"
+    existing = {
+        "memory": {
+            "backend": "file",
+            "backends": {
+                "file": {},
+                "openviking": {
+                    "ovConfig": {"storage": {}},
+                    "searchMode": "find",
+                    "targetUri": "viking://custom/",
+                    "recallTimeoutS": 9.5,
+                    "waitProcessedTimeoutS": 14.0,
+                },
+            },
+        }
+    }
+    config_path.write_text(json.dumps(existing), encoding="utf-8")
+    monkeypatch.setattr("aeloon.channels.registry.discover_all", lambda: {})
+
+    result = runner.invoke(
+        app,
+        ["onboard", "--config", str(config_path), "--workspace", str(workspace_path)],
+        input="n\n",
+    )
+
+    assert result.exit_code == 0
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    openviking = saved["memory"]["backends"]["openviking"]
+
+    assert saved["memory"]["backend"] == "file"
+    assert openviking["searchMode"] == "find"
+    assert openviking["targetUri"] == "viking://custom/"
+    assert openviking["recallTimeoutS"] == 9.5
+    assert openviking["waitProcessedTimeoutS"] == 14.0
+    assert openviking["ovConfig"] == {"storage": {}}
 
 
 def test_config_matches_github_copilot_codex_with_hyphen_prefix():
@@ -461,10 +571,11 @@ def test_agent_wechat_login_message_uses_bus_backed_one_shot(monkeypatch, tmp_pa
         "aeloon.cli.flows.agent._print_agent_response",
         lambda response, **_kwargs: printed.append(response),
     )
-    monkeypatch.setattr(
-        "aeloon.cli.flows.agent._try_render_inline_image",
-        lambda path: rendered_media.append(path) or True,
-    )
+    def _capture_rendered_media(path: str) -> bool:
+        rendered_media.append(path)
+        return True
+
+    monkeypatch.setattr("aeloon.cli.flows.agent._try_render_inline_image", _capture_rendered_media)
 
     result = runner.invoke(app, ["agent", "-m", "/wechat login"])
 

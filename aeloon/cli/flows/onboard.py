@@ -12,6 +12,53 @@ from aeloon.core.config.schema import Config
 from aeloon.utils.helpers import sync_workspace_templates
 
 
+def _openviking_backend_template() -> dict[str, object]:
+    return {
+        "ovConfig": {
+            "storage": {},
+            "vlm": {
+                "provider": "",
+                "api_key": "",
+                "model": "",
+            },
+            "embedding": {
+                "dense": {
+                    "provider": "",
+                    "api_key": "",
+                    "model": "",
+                    "dimension": 1024,
+                    "input": "multimodal",
+                }
+            },
+        },
+        "searchMode": "search",
+        "searchLimit": 3,
+        "scoreThreshold": None,
+        "targetUri": "viking://user/default/memories/",
+        "extraTargetUris": [],
+        "maxCommitRounds": 5,
+        "recallTimeoutS": 20.0,
+        "waitProcessedTimeoutS": 30.0,
+    }
+
+
+def _ensure_memory_backend_discoverability(loaded: Config) -> Config:
+    loaded.memory.backends.setdefault("file", {})
+    loaded.memory.backends.setdefault("openviking", _openviking_backend_template())
+    return loaded
+
+
+def _print_memory_backend_guidance(config_path: Path) -> None:
+    console.print("\nMemory backends:")
+    console.print("  - [cyan]file[/cyan]: default, ready immediately")
+    console.print("  - [cyan]openviking[/cyan]: optional template added to your config")
+    console.print(
+        "    Fill provider/model/api_key fields under "
+        f"[cyan]memory.backends.openviking[/cyan] in [cyan]{config_path}[/cyan]"
+    )
+    console.print("    then switch [cyan]memory.backend[/cyan] to [cyan]openviking[/cyan]")
+
+
 def run_onboard(*, workspace: str | None, config: str | None) -> None:
     """Initialize aeloon configuration and workspace."""
     from aeloon.core.config.loader import get_config_path, load_config, save_config, set_config_path
@@ -36,22 +83,26 @@ def run_onboard(*, workspace: str | None, config: str | None) -> None:
         )
         if __import__("typer").confirm("Overwrite?"):
             loaded = _apply_workspace_override(Config())
+            loaded = _ensure_memory_backend_discoverability(loaded)
             save_config(loaded, config_path)
             console.print(f"[green]✓[/green] Config reset to defaults at {config_path}")
         else:
             loaded = _apply_workspace_override(load_config(config_path))
+            loaded = _ensure_memory_backend_discoverability(loaded)
             save_config(loaded, config_path)
             console.print(
                 f"[green]✓[/green] Config refreshed at {config_path} (existing values preserved)"
             )
     else:
         loaded = _apply_workspace_override(Config())
+        loaded = _ensure_memory_backend_discoverability(loaded)
         save_config(loaded, config_path)
         console.print(f"[green]✓[/green] Created config at {config_path}")
 
     console.print(
         "[dim]Config template now uses `maxTokens` + `contextWindowTokens`; `memoryWindow` is no longer a runtime setting.[/dim]"
     )
+    _print_memory_backend_guidance(config_path)
     onboard_plugins(config_path)
     workspace_path = get_workspace_path(loaded.workspace_path)
     if not workspace_path.exists():
