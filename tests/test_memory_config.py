@@ -1,6 +1,9 @@
 import json
 from typing import cast
 
+import pytest
+from pydantic import ValidationError
+
 from aeloon.core.config.loader import load_config, save_config
 from aeloon.core.config.schema import Config
 
@@ -23,14 +26,25 @@ def test_memory_config_supports_backend_name_and_raw_backend_sections() -> None:
     assert cfg.memory.backends["dummy"]["foo"] == "bar"
 
 
-def test_memory_config_reserves_openviking_section_by_default() -> None:
+def test_memory_config_defaults_to_file_backend_only() -> None:
     cfg = Config()
 
     assert cfg.memory.backend == "file"
-    assert cfg.memory.backends["file"] == {}
-    openviking = cfg.memory.backends["openviking"]
-    assert openviking["targetUri"] == "viking://user/default/memories/"
-    assert openviking["extraTargetUris"] == []
+    assert cfg.memory.backends == {"file": {}}
+
+
+def test_memory_config_requires_openviking_section_when_selected() -> None:
+    with pytest.raises(ValidationError):
+        Config.model_validate(
+            {
+                "memory": {
+                    "backend": "openviking",
+                    "backends": {
+                        "file": {},
+                    },
+                }
+            }
+        )
 
 
 def test_save_and_load_round_trip_memory_config(tmp_path) -> None:

@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -136,40 +136,23 @@ class ExecToolConfig(Base):
     path_append: str = ""
 
 
+def _default_memory_backends() -> dict[str, dict[str, object]]:
+    return {"file": {}}
+
+
 class MemoryConfig(Base):
     """Memory backend selection and raw backend config sections."""
 
     backend: str = "file"
-    backends: dict[str, dict[str, object]] = Field(
-        default_factory=lambda: {
-            "file": {},
-            "openviking": {
-                "ovConfig": {
-                    "storage": {},
-                    "vlm": {
-                        "provider": "api_provider",
-                        "api_key": "api_key_value",
-                        "model": "model_name",
-                    },
-                    "embedding": {
-                        "dense": {
-                            "provider": "api_provider",
-                            "api_key": "api_key_value",
-                            "model": "model_name",
-                            "dimension": 1024,
-                            "input": "multimodal",
-                        }
-                    },
-                },
-                "searchMode": "find",
-                "searchLimit": 8,
-                "scoreThreshold": 0.3,
-                "targetUri": "viking://user/default/memories/",
-                "extraTargetUris": [],
-                "maxCommitRounds": 5,
-            },
-        }
-    )
+    backends: dict[str, dict[str, object]] = Field(default_factory=_default_memory_backends)
+
+    @model_validator(mode="after")
+    def validate_selected_backend(self) -> "MemoryConfig":
+        if self.backend == "openviking" and "openviking" not in self.backends:
+            raise ValueError(
+                "memory.backends.openviking is required when memory.backend='openviking'"
+            )
+        return self
 
 
 class MCPServerConfig(Base):
