@@ -20,7 +20,11 @@ class MemoryBackendConfig(BaseModel):
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
-    class_path: str | None = Field(default=None, alias="classPath")
+    class_path: str | None = Field(
+        default=None,
+        alias="classPath",
+        description="Canonical key is classPath; class_path remains supported for compatibility.",
+    )
 
 
 @dataclass(slots=True)
@@ -51,6 +55,7 @@ class MemoryBackend(ABC):
 
     backend_name: ClassVar[str]
     config_model: ClassVar[type[MemoryBackendConfig]] = MemoryBackendConfig
+    hidden_skill_names: ClassVar[list[str]] = []
 
     def __init__(self, config: MemoryBackendConfig, deps: MemoryBackendDeps):
         self.config = config
@@ -81,7 +86,9 @@ class MemoryBackend(ABC):
 
     def pending_start_index(self, session: object) -> int:
         """Return the first still-pending message index for /new archival."""
-        return 0
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement pending_start_index()"
+        )
 
     async def on_new_session(
         self,

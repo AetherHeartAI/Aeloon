@@ -27,6 +27,7 @@ def register_backend(cls: type[MemoryBackend]) -> type[MemoryBackend]:
 
 
 def _get_class_path(raw_cfg: Mapping[str, object]) -> str | None:
+    """Return canonical classPath; class_path remains supported for backward compatibility."""
     for key in ("classPath", "class_path"):
         value = raw_cfg.get(key)
         if isinstance(value, str) and value:

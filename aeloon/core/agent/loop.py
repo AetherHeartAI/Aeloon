@@ -345,8 +345,7 @@ class AgentLoop:
 
             history = session.get_history(start_index=prepared.history_start_index, max_messages=0)
             async with self.profiler.span(SpanCategory.CONTEXT, "build"):
-                memory_backend = getattr(self.memory, "backend", None)
-                hidden_skill_names = list(getattr(memory_backend, "hidden_skill_names", []))
+                hidden_skill_names = list(self.memory.backend.hidden_skill_names)
                 initial_messages = self.context.build_messages(
                     history=history,
                     current_message=content,
