@@ -1,14 +1,18 @@
 """Test MemoryStore.consolidate() handles non-string tool call arguments."""
 
 import json
+from datetime import datetime
 from pathlib import Path
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
 
-from aeloon.core.agent.memory import MemoryStore
+from aeloon.core.agent.memory import MemoryConsolidator, MemoryStore
 from aeloon.core.session.manager import Session, SessionManager
 from aeloon.memory.base import MemoryBackendDeps
+from aeloon.memory.backends.file import FileMemoryConfig
 from aeloon.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 
@@ -123,6 +127,42 @@ class TestMemoryConsolidationTypeHandling:
         assert "User likes testing" in parsed_mem["facts"]
 
     @pytest.mark.asyncio
+    async def test_datetime_arguments_are_stringified(self, tmp_path: Path) -> None:
+        store = MemoryStore(tmp_path)
+        provider = AsyncMock()
+        provider.chat_with_retry = AsyncMock(
+            return_value=_make_tool_response(
+                history_entry=datetime(2026, 1, 1, 12, 0),
+                memory_update={"seen_at": datetime(2026, 1, 1, 12, 0)},
+            )
+        )
+
+        result = await store.consolidate(_make_messages(message_count=60), provider, "test-model")
+
+        assert result is True
+        assert "2026-01-01 12:00:00" in store.history_file.read_text()
+        memory_content = json.loads(store.memory_file.read_text())
+        assert memory_content["seen_at"] == "2026-01-01 12:00:00"
+
+    @pytest.mark.asyncio
+    async def test_bytes_arguments_are_stringified(self, tmp_path: Path) -> None:
+        store = MemoryStore(tmp_path)
+        provider = AsyncMock()
+        provider.chat_with_retry = AsyncMock(
+            return_value=_make_tool_response(
+                history_entry=b"raw-bytes",
+                memory_update={"payload": b"raw-bytes"},
+            )
+        )
+
+        result = await store.consolidate(_make_messages(message_count=60), provider, "test-model")
+
+        assert result is True
+        assert "raw-bytes" in store.history_file.read_text()
+        memory_content = json.loads(store.memory_file.read_text())
+        assert memory_content["payload"] == "b'raw-bytes'"
+
+    @pytest.mark.asyncio
     async def test_string_arguments_as_raw_json(self, tmp_path: Path) -> None:
         """Some providers return arguments as a JSON string instead of parsed dict."""
         store = MemoryStore(tmp_path)
@@ -134,11 +174,14 @@ class TestMemoryConsolidationTypeHandling:
                 ToolCallRequest(
                     id="call_1",
                     name="save_memory",
-                    arguments=json.dumps(
-                        {
-                            "history_entry": "[2026-01-01] User discussed testing.",
-                            "memory_update": "# Memory\nUser likes testing.",
-                        }
+                    arguments=cast(
+                        dict[str, object],
+                        json.dumps(
+                            {
+                                "history_entry": "[2026-01-01] User discussed testing.",
+                                "memory_update": "# Memory\nUser likes testing.",
+                            }
+                        ),
                     ),
                 )
             ],
@@ -193,12 +236,15 @@ class TestMemoryConsolidationTypeHandling:
                 ToolCallRequest(
                     id="call_1",
                     name="save_memory",
-                    arguments=[
-                        {
-                            "history_entry": "[2026-01-01] User discussed testing.",
-                            "memory_update": "# Memory\nUser likes testing.",
-                        }
-                    ],
+                    arguments=cast(
+                        dict[str, object],
+                        [
+                            {
+                                "history_entry": "[2026-01-01] User discussed testing.",
+                                "memory_update": "# Memory\nUser likes testing.",
+                            }
+                        ],
+                    ),
                 )
             ],
         )
@@ -224,7 +270,7 @@ class TestMemoryConsolidationTypeHandling:
                 ToolCallRequest(
                     id="call_1",
                     name="save_memory",
-                    arguments=[],
+                    arguments=cast(dict[str, object], []),
                 )
             ],
         )
@@ -248,7 +294,7 @@ class TestMemoryConsolidationTypeHandling:
                 ToolCallRequest(
                     id="call_1",
                     name="save_memory",
-                    arguments=["string", "content"],
+                    arguments=cast(dict[str, object], ["string", "content"]),
                 )
             ],
         )
@@ -504,6 +550,17 @@ class TestMemoryConsolidationTypeHandling:
         assert store._consecutive_failures == 1
 
 
+def test_file_memory_config_rejects_zero_raw_archive_threshold() -> None:
+    with pytest.raises(ValidationError):
+        FileMemoryConfig.model_validate({"maxFailuresBeforeRawArchive": 0})
+
+
+def test_legacy_memory_consolidator_import_reexports_backend_type() -> None:
+    from aeloon.memory.backends.file import MemoryConsolidator as BackendMemoryConsolidator
+
+    assert MemoryConsolidator is BackendMemoryConsolidator
+
+
 @pytest.mark.asyncio
 async def test_file_backend_prepare_turn_reads_memory_and_reports_offset(tmp_path: Path) -> None:
     backend = _make_file_backend(tmp_path)
@@ -521,4 +578,5 @@ async def test_file_backend_prepare_turn_reads_memory_and_reports_offset(tmp_pat
 
     assert prepared.history_start_index == 4
     assert any("Long-term Memory" in section for section in prepared.system_sections)
+    assert prepared.runtime_lines[0] == "Memory backend: file"
     assert any("MEMORY.md" in line for line in prepared.runtime_lines)

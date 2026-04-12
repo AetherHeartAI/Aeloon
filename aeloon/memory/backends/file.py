@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import weakref
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -61,7 +60,11 @@ _TOOL_CHOICE_ERROR_MARKERS = (
 
 
 def _ensure_text(value: object) -> str:
-    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    return (
+        value
+        if isinstance(value, str)
+        else json.dumps(value, ensure_ascii=False, default=str)
+    )
 
 
 def _normalize_save_memory_args(args: object) -> dict[str, object] | None:
@@ -235,7 +238,11 @@ class FileMemoryConfig(MemoryBackendConfig):
     memory_dir: str = Field(default="memory", alias="memoryDir")
     long_term_filename: str = Field(default="MEMORY.md", alias="longTermFilename")
     history_filename: str = Field(default="HISTORY.md", alias="historyFilename")
-    max_failures_before_raw_archive: int = Field(default=3, alias="maxFailuresBeforeRawArchive")
+    max_failures_before_raw_archive: int = Field(
+        default=3,
+        alias="maxFailuresBeforeRawArchive",
+        ge=1,
+    )
     trigger_ratio: float = Field(default=1.0, alias="triggerRatio")
     target_ratio: float = Field(default=0.5, alias="targetRatio")
     max_consolidation_rounds: int = Field(default=5, alias="maxConsolidationRounds")
@@ -247,6 +254,7 @@ class FileMemoryBackend(MemoryBackend):
 
     backend_name = "file"
     config_model = FileMemoryConfig
+    config: FileMemoryConfig
 
     def __init__(self, config: FileMemoryConfig, deps: MemoryBackendDeps):
         super().__init__(config, deps)
@@ -257,7 +265,7 @@ class FileMemoryBackend(MemoryBackend):
         self.context_window_tokens = deps.context_window_tokens
         self._build_messages = deps.build_messages
         self._get_tool_definitions = deps.get_tool_definitions
-        self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+        self._locks: dict[str, asyncio.Lock] = {}
 
     @property
     def long_term_path(self) -> Path:
@@ -309,6 +317,7 @@ class FileMemoryBackend(MemoryBackend):
             history_start_index=self._last_consolidated(session),
             system_sections=system_sections,
             runtime_lines=[
+                "Memory backend: file",
                 f"Long-term memory: {self.long_term_path}",
                 f"History log: {self.history_path}",
             ],
