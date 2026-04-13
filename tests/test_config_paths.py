@@ -1,13 +1,18 @@
 from pathlib import Path
 
 from aeloon.core.config.paths import (
+    get_archive_db_path,
     get_bridge_install_dir,
     get_cli_history_path,
     get_cron_dir,
     get_data_dir,
+    get_env_path,
     get_legacy_sessions_dir,
     get_logs_dir,
     get_media_dir,
+    get_profile_root,
+    get_prompt_memory_dir,
+    get_provider_state_dir,
     get_runtime_subdir,
     get_workspace_path,
 )
@@ -40,3 +45,14 @@ def test_shared_and_legacy_paths_remain_global() -> None:
 def test_workspace_path_is_explicitly_resolved() -> None:
     assert get_workspace_path() == Path.home() / ".aeloon" / "workspace"
     assert get_workspace_path("~/custom-workspace") == Path.home() / "custom-workspace"
+
+
+def test_memory_runtime_paths_follow_active_config_root(monkeypatch, tmp_path: Path) -> None:
+    config_file = tmp_path / "profiles" / "work" / "config.json"
+    monkeypatch.setattr("aeloon.core.config.paths.get_config_path", lambda: config_file)
+
+    assert get_profile_root() == config_file.parent
+    assert get_env_path() == config_file.parent / ".env"
+    assert get_prompt_memory_dir() == config_file.parent / "memory"
+    assert get_provider_state_dir() == config_file.parent / "providers"
+    assert get_archive_db_path() == config_file.parent / "archive.db"

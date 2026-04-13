@@ -140,17 +140,68 @@ def _default_memory_backends() -> dict[str, dict[str, object]]:
     return {"file": {}}
 
 
-class MemoryConfig(Base):
-    """Memory backend selection and raw backend config sections."""
+class PromptMemoryConfig(Base):
+    """Always-on local prompt memory settings."""
 
+    enabled: bool = True
+    directory: str = "memory"
+    memory_file: str = Field(default="MEMORY.md", alias="memoryFile")
+    user_file: str = Field(default="USER.md", alias="userFile")
+    memory_char_limit: int = Field(default=2200, alias="memoryCharLimit")
+    user_char_limit: int = Field(default=1375, alias="userCharLimit")
+
+
+class SessionArchiveConfig(Base):
+    """Transcript archive sidecar settings."""
+
+    enabled: bool = True
+    database: str = "archive.db"
+
+
+class MemoryFlushConfig(Base):
+    """Flush lifecycle settings."""
+
+    enabled: bool = True
+
+
+class MemoryConfig(Base):
+    """Layered memory config with backend-compatibility aliases."""
+
+    prompt: PromptMemoryConfig = Field(default_factory=PromptMemoryConfig)
+    archive: SessionArchiveConfig = Field(default_factory=SessionArchiveConfig)
+    flush: MemoryFlushConfig = Field(default_factory=MemoryFlushConfig)
+    provider: str | None = None
+    providers: dict[str, dict[str, object]] = Field(default_factory=dict)
     backend: str = "file"
     backends: dict[str, dict[str, object]] = Field(default_factory=_default_memory_backends)
 
     @model_validator(mode="after")
     def validate_selected_backend(self) -> "MemoryConfig":
-        if self.backend == "openviking" and "openviking" not in self.backends:
+        if self.provider is None and self.backend != "file":
+            self.provider = self.backend
+
+        if self.provider is not None:
+            if self.provider not in self.providers:
+                raw_provider = self.backends.get(self.provider)
+                if raw_provider is None:
+                    raise ValueError(
+                        f"memory.providers.{self.provider} is required when "
+                        f"memory.provider='{self.provider}'"
+                    )
+                self.providers[self.provider] = dict(raw_provider)
+            self.backend = self.provider
+        else:
+            self.backend = "file"
+
+        compat_backends = dict(self.backends)
+        compat_backends.setdefault("file", {})
+        if self.provider is not None:
+            compat_backends[self.provider] = dict(self.providers[self.provider])
+        self.backends = compat_backends
+
+        if self.provider == "openviking" and "openviking" not in self.providers:
             raise ValueError(
-                "memory.backends.openviking is required when memory.backend='openviking'"
+                "memory.providers.openviking is required when memory.provider='openviking'"
             )
         return self
 
