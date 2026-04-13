@@ -18,7 +18,9 @@ from aeloon.core.agent.tools.web import WebFetchTool, WebSearchTool
 
 if TYPE_CHECKING:
     from aeloon.core.config.schema import ExecToolConfig, WebSearchConfig
+    from aeloon.memory.archive_service import SessionArchiveService
     from aeloon.memory.prompt_store import PromptMemoryStore
+    from aeloon.providers.base import LLMProvider
 
 
 def register_core_tools(
@@ -30,6 +32,9 @@ def register_core_tools(
     web_search_config: "WebSearchConfig",
     web_proxy: str | None,
     prompt_memory_store: "PromptMemoryStore | None" = None,
+    session_archive_service: "SessionArchiveService | None" = None,
+    provider: "LLMProvider | None" = None,
+    model: str | None = None,
 ) -> None:
     """Register the shared core tools set."""
     allowed_dir = workspace if restrict_to_workspace else None
@@ -62,3 +67,13 @@ def register_core_tools(
         from aeloon.core.agent.tools.memory import MemoryTool
 
         registry.register(MemoryTool(prompt_memory_store))
+    if session_archive_service is not None and provider is not None and model is not None:
+        from aeloon.core.agent.tools.session_search import SessionSearchTool
+
+        registry.register(
+            SessionSearchTool(
+                service=session_archive_service,
+                provider=provider,
+                model=model,
+            )
+        )

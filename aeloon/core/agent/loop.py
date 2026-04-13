@@ -25,6 +25,7 @@ from aeloon.core.agent.turn import TurnContext
 from aeloon.core.bus.events import InboundMessage, OutboundMessage
 from aeloon.core.bus.queue import MessageBus
 from aeloon.core.session.manager import SessionManager
+from aeloon.memory.archive_service import SessionArchiveService
 from aeloon.memory.base import MemoryBackendDeps, PreparedMemoryContext
 from aeloon.memory.runtime import MemoryRuntime
 from aeloon.plugins._sdk.runtime import PLUGIN_SESSION_PREFIX
@@ -202,6 +203,13 @@ class AgentLoop:
             web_search_config=self.web_search_config,
             web_proxy=self.web_proxy,
             prompt_memory_store=self.memory.prompt_memory,
+            session_archive_service=(
+                self.memory.session_archive
+                if isinstance(self.memory.session_archive, SessionArchiveService)
+                else None
+            ),
+            provider=self.provider,
+            model=self.model,
         )
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.skill_runtime.activate_defaults()
@@ -346,7 +354,8 @@ class AgentLoop:
 
             history = session.get_history(start_index=prepared.history_start_index, max_messages=0)
             async with self.profiler.span(SpanCategory.CONTEXT, "build"):
-                hidden_skill_names = list(self.memory.backend.hidden_skill_names)
+                backend = getattr(self.memory, "backend", None)
+                hidden_skill_names = list(getattr(backend, "hidden_skill_names", []))
                 initial_messages = self.context.build_messages(
                     history=history,
                     current_message=content,

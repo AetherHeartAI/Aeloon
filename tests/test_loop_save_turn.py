@@ -119,6 +119,17 @@ class _FakeMemoryManager:
         return None
 
 
+class _FakeArchiveService:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+
+    async def ingest_session(self, session: Session) -> None:
+        self.calls.append((session.key, len(session.messages)))
+
+    async def close(self) -> None:
+        return None
+
+
 @pytest.mark.asyncio
 async def test_loop_uses_memory_manager_prepare_turn_before_llm(tmp_path) -> None:
     provider = MagicMock()
@@ -137,3 +148,24 @@ async def test_loop_uses_memory_manager_prepare_turn_before_llm(tmp_path) -> Non
     await loop.process_direct("hello", session_key="cli:test")
 
     assert loop.memory.prepare_called is True
+
+
+@pytest.mark.asyncio
+async def test_loop_ingests_persisted_turn_into_archive_after_save(tmp_path) -> None:
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    provider.chat_with_retry = AsyncMock(return_value=LLMResponse(content="ok", tool_calls=[]))
+
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path,
+        model="test-model",
+    )
+    archive = _FakeArchiveService()
+    loop.memory.session_archive = archive
+
+    await loop.process_direct("hello", session_key="cli:test-archive")
+    await loop.memory.close()
+
+    assert archive.calls == [("cli:test-archive", 2)]

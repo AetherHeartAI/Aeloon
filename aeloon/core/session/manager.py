@@ -302,6 +302,15 @@ class SessionManager:
         """Remove a session from the in-memory cache."""
         self._cache.pop(key, None)
 
+    def archive_metadata(self, session: Session) -> dict[str, object]:
+        """Return archive-friendly metadata for a session snapshot."""
+        source, chat_id = (session.key.split(":", 1) if ":" in session.key else (session.key, None))
+        metadata = dict(session.metadata)
+        metadata.setdefault("source", source)
+        metadata.setdefault("chat_id", chat_id)
+        metadata.setdefault("lineage_id", session.key)
+        return metadata
+
     def list_sessions(self) -> list[dict[str, Any]]:
         """
         List all sessions.

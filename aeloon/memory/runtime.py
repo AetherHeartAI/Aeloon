@@ -12,7 +12,10 @@ from loguru import logger
 import aeloon.memory.backends as _builtin_backends  # noqa: F401
 
 from aeloon.core.config.schema import MemoryConfig, PromptMemoryConfig
+from aeloon.core.config.paths import get_archive_db_path
+from aeloon.core.session.manager import Session
 from aeloon.memory.base import MemoryBackend, MemoryBackendDeps, PreparedMemoryContext
+from aeloon.memory.archive_service import SessionArchiveService
 from aeloon.memory.prompt_store import PromptMemoryStore
 from aeloon.memory.registry import build_backend
 from aeloon.memory.types import MessagePayload
@@ -41,6 +44,16 @@ class ProviderManagerProtocol(Protocol):
         """Shut down provider resources."""
 
 
+class SessionArchiveProtocol(Protocol):
+    """Archive ingestion contract."""
+
+    async def ingest_session(self, session: Session) -> None:
+        """Ingest one persisted session snapshot."""
+
+    async def close(self) -> None:
+        """Close archive resources."""
+
+
 class MemoryRuntime:
     """Own the memory backend facade and layered runtime slots."""
 
@@ -51,7 +64,7 @@ class MemoryRuntime:
         *,
         backend: MemoryBackend | None = None,
         prompt_memory: PromptMemoryStore | None = None,
-        session_archive: object | None = None,
+        session_archive: SessionArchiveProtocol | None = None,
         provider_manager: ProviderManagerProtocol | None = None,
         flush_coordinator: FlushCoordinatorProtocol | None = None,
     ):
@@ -61,6 +74,11 @@ class MemoryRuntime:
         if self.prompt_memory is None and memory_config.prompt.enabled:
             self.prompt_memory = PromptMemoryStore(deps.workspace, memory_config.prompt)
         self.session_archive = session_archive
+        if self.session_archive is None and memory_config.archive.enabled:
+            self.session_archive = SessionArchiveService(
+                workspace=deps.workspace,
+                db_path=get_archive_db_path(),
+            )
         self.provider_manager = provider_manager
         self.flush_coordinator = flush_coordinator
         self._background_tasks: list[asyncio.Task[None]] = []
@@ -72,7 +90,7 @@ class MemoryRuntime:
         backend: MemoryBackend,
         *,
         prompt_memory: PromptMemoryStore | None = None,
-        session_archive: object | None = None,
+        session_archive: SessionArchiveProtocol | None = None,
         provider_manager: ProviderManagerProtocol | None = None,
         flush_coordinator: FlushCoordinatorProtocol | None = None,
     ) -> "MemoryRuntime":
@@ -130,13 +148,18 @@ class MemoryRuntime:
         final_content: str | None,
     ) -> None:
         """Schedule backend post-turn work in the background."""
-        self._track_task(
-            self.backend.after_turn(
+        async def _after_turn_task() -> None:
+            if self.session_archive is not None and isinstance(session, Session):
+                await self.session_archive.ingest_session(session)
+            await self.backend.after_turn(
                 session=session,
                 raw_new_messages=raw_new_messages,
                 persisted_new_messages=persisted_new_messages,
                 final_content=final_content,
             )
+
+        self._track_task(
+            _after_turn_task()
         )
 
     async def on_new_session(
@@ -204,6 +227,8 @@ class MemoryRuntime:
             pending = list(self._background_tasks)
             await asyncio.gather(*pending, return_exceptions=True)
             self._background_tasks = [task for task in self._background_tasks if not task.done()]
+        if self.session_archive is not None:
+            await self.session_archive.close()
         if self.provider_manager is not None:
             await self.provider_manager.shutdown()
         if self.flush_coordinator is not None:
