@@ -48,6 +48,7 @@ class PreparedMemoryContext:
     system_sections: list[str] = field(default_factory=list)
     runtime_lines: list[str] = field(default_factory=list)
     always_skill_names: list[str] = field(default_factory=list)
+    recalled_context_blocks: list[str] = field(default_factory=list)
 
 
 class MemoryBackend(ABC):

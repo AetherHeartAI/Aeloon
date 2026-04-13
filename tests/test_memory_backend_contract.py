@@ -211,3 +211,11 @@ def test_memory_backend_pending_start_index_requires_override(tmp_path: Path) ->
 
     with pytest.raises(NotImplementedError, match="must implement pending_start_index"):
         backend.pending_start_index(object())
+
+
+def test_prepared_memory_context_defaults_recalled_context_blocks_to_empty_list() -> None:
+    from aeloon.memory.base import PreparedMemoryContext
+
+    prepared = PreparedMemoryContext()
+
+    assert prepared.recalled_context_blocks == []

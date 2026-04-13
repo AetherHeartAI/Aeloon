@@ -26,7 +26,7 @@ from aeloon.core.bus.events import InboundMessage, OutboundMessage
 from aeloon.core.bus.queue import MessageBus
 from aeloon.core.session.manager import SessionManager
 from aeloon.memory.base import MemoryBackendDeps, PreparedMemoryContext
-from aeloon.memory.manager import MemoryManager
+from aeloon.memory.runtime import MemoryRuntime
 from aeloon.plugins._sdk.runtime import PLUGIN_SESSION_PREFIX
 from aeloon.providers.base import LLMProvider
 
@@ -141,7 +141,7 @@ class AgentLoop:
         self.dispatcher = Dispatcher(self)
         self.plugin_manager: Any = None  # Injected after boot.
 
-        self.memory = MemoryManager(
+        self.memory = MemoryRuntime(
             memory_config=self.memory_config,
             deps=MemoryBackendDeps(
                 workspace=workspace,
@@ -412,9 +412,23 @@ class AgentLoop:
     ) -> OutboundMessage:
         """Backward-compatible wrapper for profile command handling."""
         from aeloon.core.agent.commands.settings import handle_profile
+        from aeloon.core.agent.commands._context import CommandContext
 
         self.dispatcher._ensure_builtin_dispatch_state()
-        return await handle_profile(self.dispatcher._command_env, msg, " ".join(args))
+        ctx = CommandContext.from_dispatch(
+            agent_loop=self,
+            msg=msg,
+            session_key=f"{msg.channel}:{msg.chat_id}",
+            is_builtin=True,
+            send_progress=None,
+        )
+        content = await handle_profile(ctx, " ".join(args))
+        return OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content=content or "",
+            metadata=msg.metadata or {},
+        )
 
     async def _dispatch(self, msg: InboundMessage) -> None:
         """Backward-compatible wrapper for dispatcher dispatch."""

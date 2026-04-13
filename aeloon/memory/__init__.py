@@ -12,6 +12,7 @@ from aeloon.memory.errors import (
     UnknownMemoryBackendError,
 )
 from aeloon.memory.manager import MemoryManager
+from aeloon.memory.runtime import MemoryRuntime
 from aeloon.memory.registry import register_backend
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     "MemoryBackendConfig",
     "MemoryBackendDeps",
     "MemoryManager",
+    "MemoryRuntime",
     "MissingMemoryBackendDependencyError",
     "PreparedMemoryContext",
     "UnknownMemoryBackendError",
