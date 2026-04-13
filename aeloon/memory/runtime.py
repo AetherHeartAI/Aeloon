@@ -10,14 +10,16 @@ from typing import Protocol
 from loguru import logger
 
 import aeloon.memory.backends as _builtin_backends  # noqa: F401
-
-from aeloon.core.config.schema import MemoryConfig, PromptMemoryConfig
 from aeloon.core.config.paths import get_archive_db_path
+from aeloon.core.config.schema import MemoryConfig, PromptMemoryConfig
 from aeloon.core.session.manager import Session
-from aeloon.memory.base import MemoryBackend, MemoryBackendDeps, PreparedMemoryContext
 from aeloon.memory.archive_service import SessionArchiveService
+from aeloon.memory.base import MemoryBackend, MemoryBackendDeps, PreparedMemoryContext
+from aeloon.memory.flush import MemoryFlushCoordinator
 from aeloon.memory.prompt_store import PromptMemoryStore
+from aeloon.memory.providers.manager import ProviderManager
 from aeloon.memory.registry import build_backend
+from aeloon.memory.security import build_memory_context_block
 from aeloon.memory.types import MessagePayload
 
 
@@ -39,6 +41,44 @@ class FlushCoordinatorProtocol(Protocol):
 
 class ProviderManagerProtocol(Protocol):
     """Provider-manager shutdown contract."""
+
+    def system_prompt_sections(self) -> list[str]:
+        """Return provider-authored system sections."""
+
+    def always_skill_names(self) -> list[str]:
+        """Return provider-specific always-on skill names."""
+
+    async def prefetch(
+        self,
+        *,
+        session: object,
+        query: str,
+        channel: str | None,
+        chat_id: str | None,
+        current_role: str,
+    ) -> str:
+        """Return provider recall for the next turn."""
+
+    async def sync_turn(
+        self,
+        *,
+        session: object,
+        raw_new_messages: list[dict[str, object]],
+        persisted_new_messages: list[dict[str, object]],
+        final_content: str | None,
+    ) -> None:
+        """Persist a completed turn."""
+
+    async def on_pre_compress(
+        self,
+        *,
+        session: object,
+        pending_messages: list[dict[str, object]],
+    ) -> None:
+        """Flush provider state before context loss."""
+
+    async def on_memory_write(self, *, action: str, target: str, content: str) -> None:
+        """Mirror prompt-memory writes into the provider."""
 
     async def shutdown(self) -> None:
         """Shut down provider resources."""
@@ -80,7 +120,15 @@ class MemoryRuntime:
                 db_path=get_archive_db_path(),
             )
         self.provider_manager = provider_manager
+        if self.provider_manager is None and memory_config.provider and memory_config.backend == "file":
+            self.provider_manager = ProviderManager.from_config(memory_config, deps)
         self.flush_coordinator = flush_coordinator
+        if self.flush_coordinator is None and memory_config.flush.enabled and self.prompt_memory is not None:
+            self.flush_coordinator = MemoryFlushCoordinator(
+                provider=deps.provider,
+                model=deps.model,
+                prompt_store=self.prompt_memory,
+            )
         self._background_tasks: list[asyncio.Task[None]] = []
         self._closing = False
 
@@ -133,7 +181,25 @@ class MemoryRuntime:
         skills = list(prepared.always_skill_names)
         if prompt_sections:
             skills = list(dict.fromkeys([*skills, "memory"]))
-        return replace(prepared, system_sections=sections, always_skill_names=skills)
+        recalled_blocks = list(prepared.recalled_context_blocks)
+        if self.provider_manager is not None:
+            sections.extend(self.provider_manager.system_prompt_sections())
+            provider_recall = await self.provider_manager.prefetch(
+                session=session,
+                query=query,
+                channel=channel,
+                chat_id=chat_id,
+                current_role=current_role,
+            )
+            if provider_recall:
+                recalled_blocks.append(build_memory_context_block(provider_recall))
+            skills = list(dict.fromkeys([*skills, *self.provider_manager.always_skill_names()]))
+        return replace(
+            prepared,
+            system_sections=sections,
+            always_skill_names=skills,
+            recalled_context_blocks=recalled_blocks,
+        )
 
     def pending_start_index(self, session: object) -> int:
         """Expose backend-owned pending history boundaries."""
@@ -157,6 +223,13 @@ class MemoryRuntime:
                 persisted_new_messages=persisted_new_messages,
                 final_content=final_content,
             )
+            if self.provider_manager is not None:
+                await self.provider_manager.sync_turn(
+                    session=session,
+                    raw_new_messages=raw_new_messages,
+                    persisted_new_messages=persisted_new_messages,
+                    final_content=final_content,
+                )
 
         self._track_task(
             _after_turn_task()
@@ -197,12 +270,23 @@ class MemoryRuntime:
     ) -> None:
         """Flush runtime-owned memory before context loss."""
         if self.flush_coordinator is None:
+            if self.provider_manager is not None:
+                await self.provider_manager.on_pre_compress(
+                    session=session,
+                    pending_messages=list(pending_messages or []),
+                )
             return
+        pending = list(pending_messages or [])
         await self.flush_coordinator.flush(
             session=session,
-            pending_messages=list(pending_messages or []),
+            pending_messages=pending,
             reason=reason,
         )
+        if self.provider_manager is not None:
+            await self.provider_manager.on_pre_compress(
+                session=session,
+                pending_messages=pending,
+            )
 
     async def on_shutdown(
         self,

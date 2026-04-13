@@ -17,10 +17,13 @@ from aeloon.cli.flows.agent import run_agent
 from aeloon.cli.flows.benchmark import run_benchmark
 from aeloon.cli.flows.gateway import run_gateway
 from aeloon.cli.flows.onboard import run_onboard
+from aeloon.cli.memory import memory_app  # noqa: F401
 from aeloon.cli.plugins import plugin_cli_app, plugins_app  # noqa: F401
 from aeloon.cli.providers import provider_app  # noqa: F401
 
 __all__ = ["app"]
+
+app.add_typer(memory_app, name="memory")
 
 
 def version_callback(value: bool) -> None:

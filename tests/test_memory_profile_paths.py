@@ -24,9 +24,17 @@ def test_named_profile_paths_are_isolated(monkeypatch, tmp_path: Path) -> None:
     assert get_profile_name(config_path) == "work"
     assert get_profile_root(config_path=config_path) == tmp_path / "profiles" / "work"
     assert get_env_path(config_path=config_path) == tmp_path / "profiles" / "work" / ".env"
-    assert get_prompt_memory_dir(config_path=config_path) == tmp_path / "profiles" / "work" / "memory"
-    assert get_provider_state_dir(config_path=config_path) == tmp_path / "profiles" / "work" / "providers"
-    assert get_archive_db_path(config_path=config_path) == tmp_path / "profiles" / "work" / "archive.db"
+    assert (
+        get_prompt_memory_dir(config_path=config_path) == tmp_path / "profiles" / "work" / "memory"
+    )
+    assert (
+        get_provider_state_dir(config_path=config_path)
+        == tmp_path / "profiles" / "work" / "providers"
+    )
+    assert (
+        get_archive_db_path(config_path=config_path)
+        == tmp_path / "profiles" / "work" / "archive.db"
+    )
 
 
 def test_default_profile_paths_remain_backward_compatible(monkeypatch, tmp_path: Path) -> None:

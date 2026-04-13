@@ -648,9 +648,7 @@ class TestNewCommandArchival:
         assert archived.is_set()
 
     @pytest.mark.asyncio
-    async def test_new_delays_final_ack_until_blocking_reset_finishes(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_new_delays_final_ack_until_blocking_reset_finishes(self, tmp_path: Path) -> None:
         from aeloon.core.bus.events import InboundMessage
         from aeloon.memory.base import MemoryBackend, MemoryBackendConfig, PreparedMemoryContext
         from aeloon.memory.manager import MemoryManager

@@ -403,7 +403,7 @@ async def _run_plugin_cli_command(
     print_deprecated_memory_window_notice(loaded_config)
     sync_workspace_templates(
         loaded_config.workspace_path,
-        include_file_memory=loaded_config.memory.backend == "file",
+        include_file_memory=loaded_config.memory.prompt.enabled,
     )
 
     bus = MessageBus()

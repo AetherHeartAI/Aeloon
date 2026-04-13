@@ -27,6 +27,7 @@ from aeloon.core.bus.queue import MessageBus
 from aeloon.core.session.manager import SessionManager
 from aeloon.memory.archive_service import SessionArchiveService
 from aeloon.memory.base import MemoryBackendDeps, PreparedMemoryContext
+from aeloon.memory.providers.manager import ProviderManager
 from aeloon.memory.runtime import MemoryRuntime
 from aeloon.plugins._sdk.runtime import PLUGIN_SESSION_PREFIX
 from aeloon.providers.base import LLMProvider
@@ -154,6 +155,7 @@ class AgentLoop:
                 get_tool_definitions=self.tools.get_definitions,
             ),
         )
+        self.memory.backend.deps.flush_before_loss = self.memory.flush
         self.memory_consolidator = self.memory.backend
 
         from aeloon.core.agent.tools.policy import set_file_policy
@@ -206,6 +208,11 @@ class AgentLoop:
             session_archive_service=(
                 self.memory.session_archive
                 if isinstance(self.memory.session_archive, SessionArchiveService)
+                else None
+            ),
+            provider_manager=(
+                self.memory.provider_manager
+                if isinstance(self.memory.provider_manager, ProviderManager)
                 else None
             ),
             provider=self.provider,
@@ -360,15 +367,15 @@ class AgentLoop:
                     history=history,
                     current_message=content,
                     extra_system_sections=prepared.system_sections,
-                runtime_lines=prepared.runtime_lines,
-                extra_always_skills=prepared.always_skill_names,
-                exclude_skill_names=hidden_skill_names,
-                recalled_context_blocks=prepared.recalled_context_blocks,
-                media=media if media else None,
-                channel=ctx.channel,
-                chat_id=ctx.chat_id,
-                session_key=ctx.session_key,
-                current_role=current_role,
+                    runtime_lines=prepared.runtime_lines,
+                    extra_always_skills=prepared.always_skill_names,
+                    exclude_skill_names=hidden_skill_names,
+                    recalled_context_blocks=prepared.recalled_context_blocks,
+                    media=media if media else None,
+                    channel=ctx.channel,
+                    chat_id=ctx.chat_id,
+                    session_key=ctx.session_key,
+                    current_role=current_role,
                 )
 
             final_content, _, all_msgs = await self._run_agent_loop(
@@ -422,8 +429,8 @@ class AgentLoop:
         args: list[str],
     ) -> OutboundMessage:
         """Backward-compatible wrapper for profile command handling."""
-        from aeloon.core.agent.commands.settings import handle_profile
         from aeloon.core.agent.commands._context import CommandContext
+        from aeloon.core.agent.commands.settings import handle_profile
 
         self.dispatcher._ensure_builtin_dispatch_state()
         ctx = CommandContext.from_dispatch(

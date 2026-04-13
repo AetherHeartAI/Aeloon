@@ -772,6 +772,13 @@ class OpenVikingMemoryBackend(MemoryBackend):
             )
             if boundary is None:
                 return
+            if self.deps.flush_before_loss is not None:
+                chunk = session.messages[state["archivedThrough"] : boundary]
+                await self.deps.flush_before_loss(
+                    session=session,
+                    pending_messages=chunk,
+                    reason="compression",
+                )
             archived = await self._archive_slice(session, state, boundary)
             if not archived:
                 return

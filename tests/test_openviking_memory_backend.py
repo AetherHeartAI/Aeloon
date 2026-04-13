@@ -785,7 +785,7 @@ async def test_openviking_prepare_turn_injects_recall_and_hides_file_skill(
     assert "### Skill: openviking-memory" in prompt
     assert "### Skill: memory" not in prompt
     assert "<name>memory</name>" not in prompt
-    assert "memory/MEMORY.md" not in prompt
+    assert "memory/MEMORY.md" in prompt
     assert "memory/HISTORY.md" not in prompt
     assert prepared.always_skill_names == ["openviking-memory"]
     assert factory.clients[0].search_calls[0]["limit"] == 4

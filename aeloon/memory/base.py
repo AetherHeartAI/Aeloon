@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
@@ -38,6 +38,7 @@ class MemoryBackendDeps:
     context_window_tokens: int
     build_messages: Callable[..., list[MessagePayload]]
     get_tool_definitions: Callable[[], list[ToolDefinition]]
+    flush_before_loss: Callable[..., Awaitable[None]] | None = None
 
 
 @dataclass(slots=True)

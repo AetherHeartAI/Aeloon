@@ -28,6 +28,12 @@ async def handle_new(env: CommandEnv, msg: InboundMessage, _args_str: str) -> Ou
     session = env.sessions.get_or_create(msg.session_key)
     start_index = env.memory.pending_start_index(session)
     snapshot = list(session.messages[start_index:])
+    if snapshot and hasattr(memory, "flush"):
+        await memory.flush(
+            session=session,
+            pending_messages=snapshot,
+            reason="new-session",
+        )
     session.clear()
     env.sessions.save(session)
     env.sessions.invalidate(session.key)

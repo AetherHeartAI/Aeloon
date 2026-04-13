@@ -49,14 +49,15 @@ def _ensure_memory_backend_discoverability(loaded: Config) -> Config:
 
 
 def _print_memory_backend_guidance(config_path: Path) -> None:
-    console.print("\nMemory backends:")
-    console.print("  - [cyan]file[/cyan]: default, ready immediately")
-    console.print("  - [cyan]openviking[/cyan]: optional template added to your config")
+    console.print("\nMemory layers:")
+    console.print("  - [cyan]prompt memory[/cyan]: local `memory/MEMORY.md` + `memory/USER.md`")
+    console.print("  - [cyan]archive[/cyan]: searchable transcript sidecar")
+    console.print("  - [cyan]provider[/cyan]: optional additive provider such as OpenViking")
     console.print(
-        "    Fill provider/model/api_key fields under "
-        f"[cyan]memory.backends.openviking[/cyan] in [cyan]{config_path}[/cyan]"
+        "    Configure provider details with "
+        f"[cyan]aeloon memory setup openviking --config {config_path}[/cyan]"
     )
-    console.print("    then switch [cyan]memory.backend[/cyan] to [cyan]openviking[/cyan]")
+    console.print("    Prompt memory and archive remain active when a provider is enabled.")
 
 
 def run_onboard(*, workspace: str | None, config: str | None) -> None:
@@ -110,7 +111,7 @@ def run_onboard(*, workspace: str | None, config: str | None) -> None:
         console.print(f"[green]✓[/green] Created workspace at {workspace_path}")
     sync_workspace_templates(
         workspace_path,
-        include_file_memory=loaded.memory.backend == "file",
+        include_file_memory=loaded.memory.prompt.enabled,
     )
 
     agent_cmd = 'aeloon agent -m "Hello."'

@@ -177,6 +177,7 @@ class MemoryConfig(Base):
 
     @model_validator(mode="after")
     def validate_selected_backend(self) -> "MemoryConfig":
+        explicit_backend = "backend" in self.model_fields_set
         if self.provider is None and self.backend != "file":
             self.provider = self.backend
 
@@ -189,8 +190,9 @@ class MemoryConfig(Base):
                         f"memory.provider='{self.provider}'"
                     )
                 self.providers[self.provider] = dict(raw_provider)
-            self.backend = self.provider
-        else:
+            if not explicit_backend:
+                self.backend = self.provider
+        elif not explicit_backend:
             self.backend = "file"
 
         compat_backends = dict(self.backends)

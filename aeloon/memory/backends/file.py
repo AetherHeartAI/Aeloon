@@ -423,6 +423,12 @@ class FileMemoryBackend(MemoryBackend):
                 if not chunk:
                     return
 
+                if self.deps.flush_before_loss is not None:
+                    await self.deps.flush_before_loss(
+                        session=session,
+                        pending_messages=chunk,
+                        reason="compression",
+                    )
                 logger.info(
                     "Token consolidation round {} for {}: {}/{} via {}, chunk={} msgs",
                     round_num,

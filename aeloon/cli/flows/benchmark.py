@@ -44,7 +44,7 @@ def run_benchmark(
     print_deprecated_memory_window_notice(loaded_config)
     sync_workspace_templates(
         loaded_config.workspace_path,
-        include_file_memory=loaded_config.memory.backend == "file",
+        include_file_memory=loaded_config.memory.prompt.enabled,
     )
 
     agent_loop = AgentLoop(

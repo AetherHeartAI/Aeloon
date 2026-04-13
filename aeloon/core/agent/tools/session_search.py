@@ -7,7 +7,11 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Literal
 
 from aeloon.core.agent.tools.base import Tool
-from aeloon.memory.archive_service import RecentArchivedSession, SessionArchiveService, SessionSearchHit
+from aeloon.memory.archive_service import (
+    RecentArchivedSession,
+    SessionArchiveService,
+    SessionSearchHit,
+)
 from aeloon.providers.base import LLMProvider
 
 if TYPE_CHECKING:
@@ -30,7 +34,7 @@ def _format_conversation(messages: list[dict[str, object]]) -> str:
         if role == "TOOL" and tool_name:
             parts.append(f"[TOOL:{tool_name}]: {content}")
         elif role == "ASSISTANT" and message.get("tool_calls"):
-            parts.append(f"[ASSISTANT]: [Called tools]")
+            parts.append("[ASSISTANT]: [Called tools]")
             if content:
                 parts.append(f"[ASSISTANT]: {content}")
         else:

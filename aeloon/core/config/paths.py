@@ -46,6 +46,11 @@ def get_profile_name(config_path: Path | None = None) -> str | None:
     try:
         relative_parent = path.parent.relative_to(home)
     except ValueError:
+        if "profiles" in path.parent.parts:
+            parts = list(path.parent.parts)
+            index = parts.index("profiles")
+            if len(parts) > index + 1:
+                return parts[index + 1]
         return None
     if len(relative_parent.parts) >= 2 and relative_parent.parts[0] == "profiles":
         return relative_parent.parts[1]
@@ -61,10 +66,16 @@ def get_profile_root(
     normalized_profile = _normalize_profile_name(profile)
     if normalized_profile is not None:
         return get_aeloon_home() / "profiles" / normalized_profile
-    active_config_path = (config_path or get_config_path()).expanduser().resolve()
-    active_profile = get_profile_name(active_config_path)
-    if active_profile is not None:
-        return get_aeloon_home() / "profiles" / active_profile
+    if config_path is not None:
+        return config_path.expanduser().resolve().parent
+    active_config_path = get_config_path().expanduser().resolve()
+    home = get_aeloon_home().expanduser().resolve()
+    try:
+        relative_parent = active_config_path.parent.relative_to(home)
+    except ValueError:
+        return active_config_path.parent
+    if len(relative_parent.parts) >= 2 and relative_parent.parts[0] == "profiles":
+        return home / "profiles" / relative_parent.parts[1]
     return active_config_path.parent
 
 

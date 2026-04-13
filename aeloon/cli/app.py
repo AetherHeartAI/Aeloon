@@ -68,6 +68,11 @@ _STATIC_COMMAND_SPECS: tuple[CommandSpec, ...] = (
         ),
     ),
     CommandSpec(
+        name="memory_cli",
+        help="Manage layered memory providers and status.",
+        cli_path=("memory",),
+    ),
+    CommandSpec(
         name="ext",
         help="Run extension commands.",
         cli_path=("ext",),

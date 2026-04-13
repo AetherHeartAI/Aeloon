@@ -18,6 +18,7 @@ class _FakeMemoryManager:
         self.start_index = start_index
         self.calls: list[list[dict[str, object]]] = []
         self.run_calls: list[list[dict[str, object]]] = []
+        self.flush_calls: list[list[dict[str, object]]] = []
 
     def pending_start_index(self, _session: object) -> int:
         return self.start_index
@@ -38,6 +39,15 @@ class _FakeMemoryManager:
     ) -> None:
         self.run_calls.append([dict(message) for message in pending_messages])
         await asyncio.Future()
+
+    async def flush(
+        self,
+        *,
+        session: object,
+        pending_messages: list[dict[str, object]],
+        reason: str | None = None,
+    ) -> None:
+        self.flush_calls.append([dict(message) for message in pending_messages])
 
 
 class _FakeLoop:
@@ -76,6 +86,12 @@ async def test_handle_new_archives_only_pending_messages(tmp_path: Path) -> None
             {"role": "assistant", "content": "new-2"},
         ]
     ]
+    assert memory.flush_calls == [
+        [
+            {"role": "user", "content": "new-1"},
+            {"role": "assistant", "content": "new-2"},
+        ]
+    ]
     assert memory.run_calls == []
     loop.bus.publish_outbound.assert_awaited_once()
     progress = loop.bus.publish_outbound.await_args.args[0]
@@ -105,6 +121,7 @@ async def test_handle_new_skips_archival_when_no_pending_messages(tmp_path: Path
     assert memory.calls == []
     assert memory.run_calls == []
     loop.bus.publish_outbound.assert_not_awaited()
+    assert memory.flush_calls == []
 
 
 @pytest.mark.asyncio
@@ -131,5 +148,6 @@ async def test_handle_new_returns_without_waiting_for_blocking_run_new_session(
 
     assert outbound.content == "New session started."
     assert memory.calls == [[{"role": "user", "content": "pending"}]]
+    assert memory.flush_calls == [[{"role": "user", "content": "pending"}]]
     assert memory.run_calls == []
     loop.bus.publish_outbound.assert_awaited_once()

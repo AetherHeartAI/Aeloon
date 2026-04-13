@@ -150,9 +150,11 @@ def test_onboard_fresh_install(mock_paths, monkeypatch) -> None:
     assert openviking["maxCommitRounds"] == 5
     assert openviking["recallTimeoutS"] == 20.0
     assert openviking["waitProcessedTimeoutS"] == 30.0
-    assert "memory backends:" in stripped_output
-    assert "file" in stripped_output
-    assert "openviking" in stripped_output
+    assert "memory layers:" in stripped_output
+    assert "prompt memory" in stripped_output
+    assert "archive" in stripped_output
+    assert "provider" in stripped_output
+    assert "aeloon memory setup openviking" in stripped_output
     assert mock_ws.call_args.args == (expected_workspace,)
 
 
@@ -273,13 +275,11 @@ def test_onboard_refresh_adds_openviking_template_without_changing_default(
     assert openviking["searchMode"] == "search"
     assert openviking["recallTimeoutS"] == 20.0
     assert openviking["waitProcessedTimeoutS"] == 30.0
-    assert "openviking" in stripped_output
+    assert "aeloon memory setup openviking" in stripped_output
     assert (workspace_path / "memory" / "MEMORY.md").exists()
 
 
-def test_onboard_refresh_preserves_existing_openviking_config(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_onboard_refresh_preserves_existing_openviking_config(tmp_path: Path, monkeypatch) -> None:
     config_path = tmp_path / "config.json"
     workspace_path = tmp_path / "workspace"
     existing = {
@@ -571,6 +571,7 @@ def test_agent_wechat_login_message_uses_bus_backed_one_shot(monkeypatch, tmp_pa
         "aeloon.cli.flows.agent._print_agent_response",
         lambda response, **_kwargs: printed.append(response),
     )
+
     def _capture_rendered_media(path: str) -> bool:
         rendered_media.append(path)
         return True

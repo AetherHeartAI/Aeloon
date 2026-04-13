@@ -148,3 +148,61 @@ async def test_memory_manager_schedules_new_session_hook(tmp_path) -> None:
     await manager.close()
 
     assert archived.is_set()
+
+
+@pytest.mark.asyncio
+async def test_memory_runtime_on_shutdown_flushes_before_close(tmp_path) -> None:
+    from aeloon.memory.base import MemoryBackend, MemoryBackendConfig, PreparedMemoryContext
+    from aeloon.memory.runtime import MemoryRuntime
+
+    events: list[str] = []
+
+    class FakeBackend(MemoryBackend):
+        backend_name = "fake-shutdown-flush"
+        config_model = MemoryBackendConfig
+
+        async def prepare_turn(
+            self,
+            *,
+            session: object,
+            query: str,
+            channel: str | None,
+            chat_id: str | None,
+            current_role: str,
+        ) -> PreparedMemoryContext:
+            return PreparedMemoryContext()
+
+        async def after_turn(
+            self,
+            *,
+            session: object,
+            raw_new_messages: list[dict[str, object]],
+            persisted_new_messages: list[dict[str, object]],
+            final_content: str | None,
+        ) -> None:
+            return None
+
+        async def close(self) -> None:
+            events.append("backend-close")
+
+    class Flush:
+        async def flush(
+            self, *, session: object, pending_messages, reason: str | None = None
+        ) -> None:
+            events.append(f"flush:{reason}")
+
+        async def close(self) -> None:
+            events.append("flush-close")
+
+    runtime = MemoryRuntime.from_backend(
+        FakeBackend(MemoryBackendConfig(), _make_deps(tmp_path)),
+        flush_coordinator=Flush(),
+    )
+
+    await runtime.on_shutdown(
+        session=Session(key="cli:test"),
+        pending_messages=[{"role": "user", "content": "bye"}],
+        reason="gateway-shutdown",
+    )
+
+    assert events == ["flush:gateway-shutdown", "flush-close", "backend-close"]

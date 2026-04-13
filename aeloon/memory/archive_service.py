@@ -78,7 +78,9 @@ class SessionArchiveService:
         limit: int,
         current_session_key: str | None = None,
     ) -> list[RecentArchivedSession]:
-        exclude_lineage_id = self._lineage_id_for_key(current_session_key) if current_session_key else None
+        exclude_lineage_id = (
+            self._lineage_id_for_key(current_session_key) if current_session_key else None
+        )
         rows = self.db.list_recent_sessions(limit=limit, exclude_lineage_id=exclude_lineage_id)
         return [
             RecentArchivedSession(
@@ -103,7 +105,9 @@ class SessionArchiveService:
         role_filter: list[str] | None = None,
         current_session_key: str | None = None,
     ) -> list[SessionSearchHit]:
-        current_lineage_id = self._lineage_id_for_key(current_session_key) if current_session_key else None
+        current_lineage_id = (
+            self._lineage_id_for_key(current_session_key) if current_session_key else None
+        )
         raw_results = self.db.search_messages(query=query, role_filter=role_filter, limit=50)
         seen_session_ids: set[str] = set()
         hits: list[SessionSearchHit] = []
@@ -176,7 +180,9 @@ class SessionArchiveService:
                     role=str(message.get("role") or "unknown"),
                     content=self._message_content_text(message.get("content")),
                     tool_name=str(message.get("name")) if message.get("name") else None,
-                    tool_call_id=str(message.get("tool_call_id")) if message.get("tool_call_id") else None,
+                    tool_call_id=str(message.get("tool_call_id"))
+                    if message.get("tool_call_id")
+                    else None,
                     tool_calls_json=(
                         json.dumps(message.get("tool_calls"), ensure_ascii=False)
                         if message.get("tool_calls") is not None

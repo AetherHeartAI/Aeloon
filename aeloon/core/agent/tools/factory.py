@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from aeloon.core.config.schema import ExecToolConfig, WebSearchConfig
     from aeloon.memory.archive_service import SessionArchiveService
     from aeloon.memory.prompt_store import PromptMemoryStore
+    from aeloon.memory.providers.manager import ProviderManager
     from aeloon.providers.base import LLMProvider
 
 
@@ -33,6 +34,7 @@ def register_core_tools(
     web_proxy: str | None,
     prompt_memory_store: "PromptMemoryStore | None" = None,
     session_archive_service: "SessionArchiveService | None" = None,
+    provider_manager: "ProviderManager | None" = None,
     provider: "LLMProvider | None" = None,
     model: str | None = None,
 ) -> None:
@@ -66,7 +68,12 @@ def register_core_tools(
     if prompt_memory_store is not None:
         from aeloon.core.agent.tools.memory import MemoryTool
 
-        registry.register(MemoryTool(prompt_memory_store))
+        registry.register(
+            MemoryTool(
+                prompt_memory_store,
+                on_write=provider_manager.on_memory_write if provider_manager is not None else None,
+            )
+        )
     if session_archive_service is not None and provider is not None and model is not None:
         from aeloon.core.agent.tools.session_search import SessionSearchTool
 

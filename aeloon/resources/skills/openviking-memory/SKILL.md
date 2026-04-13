@@ -1,12 +1,11 @@
 ---
 name: openviking-memory
-description: Use when the active memory backend is `openviking` and recalled OpenViking results are already injected into the prompt. Treat OpenViking recall as the source of long-term memory for the current turn, stay in OpenViking-backed memory mode, and ignore legacy file-memory artifacts unless the user explicitly asks about migration or file-backed memory.
+description: Use when OpenViking is enabled as an additive memory provider. Treat OpenViking recall as supplemental context layered on top of local prompt memory and transcript recall.
 ---
 
 # OpenViking Memory
 
-- Treat the `# OpenViking Recall` section as the authoritative long-term memory context for the current turn.
-- Stay in OpenViking-backed memory mode. Do not switch the agent back to legacy file-backed memory behavior unless the user explicitly asks for migration or legacy memory handling.
-- Use recalled OpenViking items to answer questions, maintain continuity, and ground follow-up decisions.
-- Ignore legacy file-memory artifacts in the workspace by default.
-- If the user explicitly asks about migration or file-backed memory, compare the legacy workspace artifacts with the current OpenViking-backed behavior before recommending changes.
+- Treat OpenViking recall as supplemental context, not a replacement for local prompt memory.
+- Keep using `memory/MEMORY.md` and `memory/USER.md` for always-on durable facts.
+- Prefer `session_search` for past conversation recall and OpenViking for semantic/provider recall.
+- If the user asks about migration or setup, explain the layered model clearly.

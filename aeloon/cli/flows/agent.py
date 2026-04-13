@@ -79,6 +79,29 @@ _should_open_slash_palette = should_open_slash_palette
 _auto_descend_query = auto_descend_query
 
 
+async def _flush_session_before_shutdown(
+    agent_loop,
+    session_key: str,
+    *,
+    reason: str,
+) -> None:
+    if not hasattr(agent_loop, "sessions") or not hasattr(agent_loop, "memory"):
+        return
+    if not hasattr(agent_loop.memory, "flush") or not hasattr(
+        agent_loop.memory, "pending_start_index"
+    ):
+        return
+    session = agent_loop.sessions.get_or_create(session_key)
+    start_index = agent_loop.memory.pending_start_index(session)
+    pending_messages = list(session.messages[start_index:])
+    if pending_messages:
+        await agent_loop.memory.flush(
+            session=session,
+            pending_messages=pending_messages,
+            reason=reason,
+        )
+
+
 def effective_profile_mode(
     agent_loop, cli_profile_flag: bool, cli_deep_flag: bool = False
 ) -> str | None:
@@ -354,7 +377,7 @@ async def _interactive_menu(title: str, options: list[tuple[str, str, str]]) -> 
         event.app.exit()
 
     _render()
-    prompt_app = Application(
+    prompt_app: Application[None] = Application(
         layout=Layout(Box(Frame(body, title=title), padding=1)),
         key_bindings=kb,
         full_screen=False,
@@ -487,7 +510,7 @@ def run_agent(
     print_deprecated_memory_window_notice(loaded_config)
     sync_workspace_templates(
         loaded_config.workspace_path,
-        include_file_memory=loaded_config.memory.backend == "file",
+        include_file_memory=loaded_config.memory.prompt.enabled,
     )
 
     bus = MessageBus()
@@ -664,6 +687,11 @@ def run_agent(
                 thinking = None
                 print("\n\n— interrupted —\n", file=sys.stderr)
             finally:
+                await _flush_session_before_shutdown(
+                    agent_loop,
+                    session_id,
+                    reason="cli-shutdown",
+                )
                 _print_profile_if_available()
                 try:
                     signal.signal(signal.SIGTERM, sigterm_handler)
@@ -954,6 +982,11 @@ def run_agent(
                     await pm._hooks.dispatch_notify(HookEvent.AGENT_STOP)
                 except Exception:
                     pass
+            await _flush_session_before_shutdown(
+                agent_loop,
+                f"{cli_state['channel']}:{cli_state['chat_id']}",
+                reason="cli-shutdown",
+            )
             await agent_loop.close_mcp()
 
     asyncio.run(_run_interactive())

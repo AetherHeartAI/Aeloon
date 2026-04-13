@@ -203,9 +203,7 @@ class SessionManager:
 
                         if "memory_state" not in data:
                             memory_state = {
-                                "file": {
-                                    "last_consolidated": data.get("last_consolidated", 0)
-                                }
+                                "file": {"last_consolidated": data.get("last_consolidated", 0)}
                             }
                     else:
                         messages.append(data)
@@ -304,7 +302,7 @@ class SessionManager:
 
     def archive_metadata(self, session: Session) -> dict[str, object]:
         """Return archive-friendly metadata for a session snapshot."""
-        source, chat_id = (session.key.split(":", 1) if ":" in session.key else (session.key, None))
+        source, chat_id = session.key.split(":", 1) if ":" in session.key else (session.key, None)
         metadata = dict(session.metadata)
         metadata.setdefault("source", source)
         metadata.setdefault("chat_id", chat_id)

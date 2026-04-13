@@ -99,7 +99,7 @@ async def test_memory_runtime_builds_backend_and_exposes_component_slots(tmp_pat
     assert runtime.prompt_memory is not None
     assert runtime.session_archive is not None
     assert runtime.provider_manager is None
-    assert runtime.flush_coordinator is None
+    assert runtime.flush_coordinator is not None
 
 
 @pytest.mark.asyncio
@@ -212,6 +212,9 @@ async def test_memory_runtime_on_shutdown_flushes_then_closes_components(tmp_pat
             events.append("flush-close")
 
     class DummyProviderManager:
+        async def on_pre_compress(self, *, session: object, pending_messages) -> None:
+            return None
+
         async def shutdown(self) -> None:
             events.append("provider-shutdown")
 

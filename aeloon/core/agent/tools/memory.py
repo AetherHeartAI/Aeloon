@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from typing import Literal, cast
 
 from aeloon.core.agent.tools.base import Tool
@@ -12,8 +13,13 @@ from aeloon.memory.prompt_store import MemoryTarget, PromptMemoryStore
 class MemoryTool(Tool):
     """Mutate always-on prompt memory."""
 
-    def __init__(self, store: PromptMemoryStore):
+    def __init__(
+        self,
+        store: PromptMemoryStore,
+        on_write: Callable[..., Awaitable[None]] | None = None,
+    ):
         self.store = store
+        self._on_write = on_write
 
     @property
     def name(self) -> str:
@@ -82,4 +88,7 @@ class MemoryTool(Tool):
             result = self.store.remove(memory_target, str(content or ""))
         else:
             result = {"success": False, "error": f"Unsupported action: {action}"}
+        if result.get("success") is True and self._on_write is not None:
+            write_content = str(new_content or content or "")
+            await self._on_write(action=action, target=target, content=write_content)
         return json.dumps(result, ensure_ascii=False)
