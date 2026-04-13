@@ -305,17 +305,13 @@ class FileMemoryBackend(MemoryBackend):
         if isinstance(session, Session):
             await self.maybe_consolidate_by_tokens(session)
 
-        memory_context = self.store.get_memory_context()
-        system_sections = [f"# Memory\n\n{memory_context}"] if memory_context else []
         return PreparedMemoryContext(
             history_start_index=self._last_consolidated(session),
-            system_sections=system_sections,
             runtime_lines=[
                 "Memory backend: file",
                 f"Long-term memory: {self.long_term_path}",
                 f"History log: {self.history_path}",
             ],
-            always_skill_names=["memory"],
         )
 
     async def after_turn(

@@ -389,3 +389,54 @@ async def test_memory_manager_rejects_new_tasks_while_closing(tmp_path: Path) ->
         manager._track_task(coro)
 
     assert getattr(coro, "cr_frame", None) is None
+
+
+@pytest.mark.asyncio
+async def test_memory_manager_prepare_turn_injects_prompt_memory_sections(tmp_path: Path) -> None:
+    from aeloon.memory.base import MemoryBackend, MemoryBackendConfig, PreparedMemoryContext
+    from aeloon.memory.manager import MemoryManager
+
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    (memory_dir / "MEMORY.md").write_text("Stable project fact.", encoding="utf-8")
+    (memory_dir / "USER.md").write_text("Prefers terse diffs.", encoding="utf-8")
+
+    class FakeBackend(MemoryBackend):
+        backend_name = "fake-prompt-runtime"
+        config_model = MemoryBackendConfig
+
+        async def prepare_turn(
+            self,
+            *,
+            session: object,
+            query: str,
+            channel: str | None,
+            chat_id: str | None,
+            current_role: str,
+        ) -> PreparedMemoryContext:
+            return PreparedMemoryContext(runtime_lines=["Memory backend: fake"])
+
+        async def after_turn(
+            self,
+            *,
+            session: object,
+            raw_new_messages: list[dict[str, object]],
+            persisted_new_messages: list[dict[str, object]],
+            final_content: str | None,
+        ) -> None:
+            return None
+
+    manager = MemoryManager.from_backend(FakeBackend(MemoryBackendConfig(), _make_deps(tmp_path)))
+
+    prepared = await manager.prepare_turn(
+        session=Session(key="cli:test"),
+        query="hello",
+        channel="cli",
+        chat_id="direct",
+        current_role="user",
+    )
+
+    prompt = "\n".join(prepared.system_sections)
+    assert "Stable project fact." in prompt
+    assert "Prefers terse diffs." in prompt
+    assert "memory" in prepared.always_skill_names

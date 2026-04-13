@@ -123,17 +123,17 @@ def _migrate_memory_config(memory: dict[str, object]) -> None:
 
     if not provider and backend and backend != "file":
         provider = backend
-    if provider and provider not in providers:
-        provider_cfg = _as_dict(backends.get(provider))
+    for backend_name, backend_value in backends.items():
+        if backend_name == "file" or backend_name in providers:
+            continue
+        provider_cfg = _as_dict(backend_value)
         if provider_cfg:
-            providers[provider] = provider_cfg
+            providers[backend_name] = provider_cfg
 
     compat_backend = provider or "file"
     compat_backends = {"file": file_cfg}
-    if "memoryDir" not in compat_backends["file"] and isinstance(prompt.get("directory"), str):
-        compat_backends["file"]["memoryDir"] = prompt["directory"]
-    if provider:
-        compat_backends[provider] = _as_dict(providers.get(provider))
+    for provider_name, provider_value in providers.items():
+        compat_backends[provider_name] = _as_dict(provider_value)
 
     memory["prompt"] = prompt
     memory["archive"] = archive

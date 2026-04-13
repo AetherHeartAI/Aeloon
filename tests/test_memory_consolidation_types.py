@@ -563,12 +563,17 @@ def test_legacy_memory_consolidator_import_reexports_backend_type() -> None:
 
 @pytest.mark.asyncio
 async def test_file_backend_prepare_turn_reads_memory_and_reports_offset(tmp_path: Path) -> None:
+    from aeloon.memory.manager import MemoryManager
+
     backend = _make_file_backend(tmp_path)
     backend.store.write_long_term("# Facts\nUser likes tea.")
+    user_memory = tmp_path / "memory" / "USER.md"
+    user_memory.parent.mkdir(parents=True, exist_ok=True)
+    user_memory.write_text("Prefers concise output.", encoding="utf-8")
     session = Session(key="cli:test")
     session.last_consolidated = 4
 
-    prepared = await backend.prepare_turn(
+    prepared = await MemoryManager.from_backend(backend).prepare_turn(
         session=session,
         query="hello",
         channel="cli",
@@ -577,6 +582,8 @@ async def test_file_backend_prepare_turn_reads_memory_and_reports_offset(tmp_pat
     )
 
     assert prepared.history_start_index == 4
-    assert any("Long-term Memory" in section for section in prepared.system_sections)
+    prompt_sections = "\n".join(prepared.system_sections)
+    assert "User likes tea." in prompt_sections
+    assert "Prefers concise output." in prompt_sections
     assert prepared.runtime_lines[0] == "Memory backend: file"
     assert any("MEMORY.md" in line for line in prepared.runtime_lines)

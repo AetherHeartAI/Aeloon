@@ -96,7 +96,7 @@ async def test_memory_runtime_builds_backend_and_exposes_component_slots(tmp_pat
     )
 
     assert prepared.runtime_lines == ["wired"]
-    assert runtime.prompt_memory is None
+    assert runtime.prompt_memory is not None
     assert runtime.session_archive is None
     assert runtime.provider_manager is None
     assert runtime.flush_coordinator is None

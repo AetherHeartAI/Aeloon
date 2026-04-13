@@ -177,6 +177,7 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
         runtime_lines: list[str] | None = None,
         extra_always_skills: list[str] | None = None,
         exclude_skill_names: list[str] | None = None,
+        recalled_context_blocks: list[str] | None = None,
         media: list[str] | None = None,
         channel: str | None = None,
         chat_id: str | None = None,
@@ -189,11 +190,12 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
 
         # Merge runtime context and user content into a single user message
         # to avoid consecutive same-role messages that some providers reject.
+        prelude_blocks = [runtime_ctx, *(recalled_context_blocks or [])]
         merged: str | list[dict[str, Any]]
         if isinstance(user_content, str):
-            merged = f"{runtime_ctx}\n\n{user_content}"
+            merged = "\n\n".join([*prelude_blocks, user_content])
         else:
-            merged = [{"type": "text", "text": runtime_ctx}] + user_content
+            merged = [{"type": "text", "text": block} for block in prelude_blocks] + user_content
 
         return [
             {

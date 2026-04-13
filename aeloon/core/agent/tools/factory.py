@@ -18,6 +18,7 @@ from aeloon.core.agent.tools.web import WebFetchTool, WebSearchTool
 
 if TYPE_CHECKING:
     from aeloon.core.config.schema import ExecToolConfig, WebSearchConfig
+    from aeloon.memory.prompt_store import PromptMemoryStore
 
 
 def register_core_tools(
@@ -28,6 +29,7 @@ def register_core_tools(
     exec_config: "ExecToolConfig",
     web_search_config: "WebSearchConfig",
     web_proxy: str | None,
+    prompt_memory_store: "PromptMemoryStore | None" = None,
 ) -> None:
     """Register the shared core tools set."""
     allowed_dir = workspace if restrict_to_workspace else None
@@ -56,3 +58,7 @@ def register_core_tools(
             fallback_fetch_timeout_s=web_search_config.fallback_fetch_timeout_s,
         )
     )
+    if prompt_memory_store is not None:
+        from aeloon.core.agent.tools.memory import MemoryTool
+
+        registry.register(MemoryTool(prompt_memory_store))

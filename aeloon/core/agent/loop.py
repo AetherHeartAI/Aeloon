@@ -201,6 +201,7 @@ class AgentLoop:
             exec_config=self.exec_config,
             web_search_config=self.web_search_config,
             web_proxy=self.web_proxy,
+            prompt_memory_store=self.memory.prompt_memory,
         )
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.skill_runtime.activate_defaults()
@@ -350,14 +351,15 @@ class AgentLoop:
                     history=history,
                     current_message=content,
                     extra_system_sections=prepared.system_sections,
-                    runtime_lines=prepared.runtime_lines,
-                    extra_always_skills=prepared.always_skill_names,
-                    exclude_skill_names=hidden_skill_names,
-                    media=media if media else None,
-                    channel=ctx.channel,
-                    chat_id=ctx.chat_id,
-                    session_key=ctx.session_key,
-                    current_role=current_role,
+                runtime_lines=prepared.runtime_lines,
+                extra_always_skills=prepared.always_skill_names,
+                exclude_skill_names=hidden_skill_names,
+                recalled_context_blocks=prepared.recalled_context_blocks,
+                media=media if media else None,
+                channel=ctx.channel,
+                chat_id=ctx.chat_id,
+                session_key=ctx.session_key,
+                current_role=current_role,
                 )
 
             final_content, _, all_msgs = await self._run_agent_loop(

@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Coroutine
+from dataclasses import replace
 from typing import Protocol
 
 from loguru import logger
 
-from aeloon.core.config.schema import MemoryConfig
-from aeloon.memory import backends as _builtin_backends  # noqa: F401
+import aeloon.memory.backends as _builtin_backends  # noqa: F401
+
+from aeloon.core.config.schema import MemoryConfig, PromptMemoryConfig
 from aeloon.memory.base import MemoryBackend, MemoryBackendDeps, PreparedMemoryContext
+from aeloon.memory.prompt_store import PromptMemoryStore
 from aeloon.memory.registry import build_backend
 from aeloon.memory.types import MessagePayload
 
@@ -47,7 +50,7 @@ class MemoryRuntime:
         deps: MemoryBackendDeps,
         *,
         backend: MemoryBackend | None = None,
-        prompt_memory: object | None = None,
+        prompt_memory: PromptMemoryStore | None = None,
         session_archive: object | None = None,
         provider_manager: ProviderManagerProtocol | None = None,
         flush_coordinator: FlushCoordinatorProtocol | None = None,
@@ -55,6 +58,8 @@ class MemoryRuntime:
         raw_cfg = memory_config.backends.get(memory_config.backend, {})
         self.backend = backend or build_backend(memory_config.backend, raw_cfg, deps)
         self.prompt_memory = prompt_memory
+        if self.prompt_memory is None and memory_config.prompt.enabled:
+            self.prompt_memory = PromptMemoryStore(deps.workspace, memory_config.prompt)
         self.session_archive = session_archive
         self.provider_manager = provider_manager
         self.flush_coordinator = flush_coordinator
@@ -66,7 +71,7 @@ class MemoryRuntime:
         cls,
         backend: MemoryBackend,
         *,
-        prompt_memory: object | None = None,
+        prompt_memory: PromptMemoryStore | None = None,
         session_archive: object | None = None,
         provider_manager: ProviderManagerProtocol | None = None,
         flush_coordinator: FlushCoordinatorProtocol | None = None,
@@ -75,6 +80,9 @@ class MemoryRuntime:
         runtime = cls.__new__(cls)
         runtime.backend = backend
         runtime.prompt_memory = prompt_memory
+        backend_deps = getattr(backend, "deps", None)
+        if runtime.prompt_memory is None and isinstance(backend_deps, MemoryBackendDeps):
+            runtime.prompt_memory = PromptMemoryStore(backend.deps.workspace, PromptMemoryConfig())
         runtime.session_archive = session_archive
         runtime.provider_manager = provider_manager
         runtime.flush_coordinator = flush_coordinator
@@ -92,13 +100,22 @@ class MemoryRuntime:
         current_role: str,
     ) -> PreparedMemoryContext:
         """Delegate turn preparation to the compatibility backend."""
-        return await self.backend.prepare_turn(
+        prepared = await self.backend.prepare_turn(
             session=session,
             query=query,
             channel=channel,
             chat_id=chat_id,
             current_role=current_role,
         )
+        if self.prompt_memory is None:
+            return prepared
+        self.prompt_memory.refresh_snapshot()
+        prompt_sections = self.prompt_memory.system_prompt_sections()
+        sections = [*prompt_sections, *prepared.system_sections]
+        skills = list(prepared.always_skill_names)
+        if prompt_sections:
+            skills = list(dict.fromkeys([*skills, "memory"]))
+        return replace(prepared, system_sections=sections, always_skill_names=skills)
 
     def pending_start_index(self, session: object) -> int:
         """Expose backend-owned pending history boundaries."""
