@@ -26,9 +26,9 @@ from aeloon.core.bus.events import InboundMessage, OutboundMessage
 from aeloon.core.bus.queue import MessageBus
 from aeloon.core.session.manager import SessionManager
 from aeloon.memory.archive_service import SessionArchiveService
-from aeloon.memory.base import MemoryBackendDeps, PreparedMemoryContext
 from aeloon.memory.providers.manager import ProviderManager
 from aeloon.memory.runtime import MemoryRuntime
+from aeloon.memory.types import MemoryRuntimeDeps, TurnMemoryContext
 from aeloon.plugins._sdk.runtime import PLUGIN_SESSION_PREFIX
 from aeloon.providers.base import LLMProvider
 
@@ -145,7 +145,7 @@ class AgentLoop:
 
         self.memory = MemoryRuntime(
             memory_config=self.memory_config,
-            deps=MemoryBackendDeps(
+            deps=MemoryRuntimeDeps(
                 workspace=workspace,
                 provider=provider,
                 model=self.model,
@@ -155,8 +155,8 @@ class AgentLoop:
                 get_tool_definitions=self.tools.get_definitions,
             ),
         )
-        self.memory.backend.deps.flush_before_loss = self.memory.flush
-        self.memory_consolidator = self.memory.backend
+        self.memory.set_flush_before_loss(self.memory.flush)
+        self.memory.set_output_manager(self.output_manager)
 
         from aeloon.core.agent.tools.policy import set_file_policy
 
@@ -344,10 +344,12 @@ class AgentLoop:
             async with self.profiler.span(SpanCategory.SESSION_LOAD, "load"):
                 session = self.sessions.get_or_create(ctx.session_key)
 
+            ctx.metadata["archive_session_id"] = session.archive_session_id
+            ctx.metadata["lineage_id"] = session.lineage_id
             self.tools.notify_turn_start(ctx)
             is_plugin_internal = ctx.session_key.startswith(PLUGIN_SESSION_PREFIX)
             if is_plugin_internal:
-                prepared = PreparedMemoryContext(
+                prepared = TurnMemoryContext(
                     history_start_index=self.memory.pending_start_index(session)
                 )
             else:
@@ -361,15 +363,13 @@ class AgentLoop:
 
             history = session.get_history(start_index=prepared.history_start_index, max_messages=0)
             async with self.profiler.span(SpanCategory.CONTEXT, "build"):
-                backend = getattr(self.memory, "backend", None)
-                hidden_skill_names = list(getattr(backend, "hidden_skill_names", []))
                 initial_messages = self.context.build_messages(
                     history=history,
                     current_message=content,
                     extra_system_sections=prepared.system_sections,
                     runtime_lines=prepared.runtime_lines,
                     extra_always_skills=prepared.always_skill_names,
-                    exclude_skill_names=hidden_skill_names,
+                    exclude_skill_names=[],
                     recalled_context_blocks=prepared.recalled_context_blocks,
                     media=media if media else None,
                     channel=ctx.channel,
@@ -401,6 +401,7 @@ class AgentLoop:
             if not is_plugin_internal:
                 await self.memory.after_turn(
                     session=session,
+                    query=content,
                     raw_new_messages=raw_new_messages,
                     persisted_new_messages=persisted_new_messages,
                     final_content=final_content,

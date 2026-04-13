@@ -72,7 +72,11 @@ def pytest_collection_modifyitems(config: Any, items: list[Any]) -> None:  # noq
 
 @pytest.fixture(autouse=True)
 def _restore_memory_registry() -> Iterator[None]:
-    from aeloon.memory import registry as memory_registry
+    try:
+        from aeloon.memory import registry as memory_registry
+    except ImportError:
+        yield
+        return
 
     snapshot = dict(memory_registry._REGISTRY)
     try:

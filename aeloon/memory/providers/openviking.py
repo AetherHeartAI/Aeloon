@@ -1,11 +1,11 @@
-"""Additive OpenViking provider wrapper."""
+"""Additive OpenViking provider."""
 
 from __future__ import annotations
 
 from aeloon.core.config.schema import Config
-from aeloon.memory.backends.openviking import OpenVikingMemoryBackend, OpenVikingMemoryConfig
-from aeloon.memory.base import MemoryBackendDeps
 from aeloon.memory.providers.base import MemoryProvider
+from aeloon.memory.providers.openviking_service import OpenVikingProviderConfig, OpenVikingService
+from aeloon.memory.types import MemoryRuntimeDeps, MessagePayload
 
 OPENVIKING_CONFIG_SCHEMA: list[dict[str, object]] = [
     {
@@ -36,13 +36,11 @@ OPENVIKING_CONFIG_SCHEMA: list[dict[str, object]] = [
 
 
 class OpenVikingProvider(MemoryProvider):
-    """Wrap the existing OpenViking backend as an additive provider."""
-
     name = "openviking"
 
-    def __init__(self, config: dict[str, object], deps: MemoryBackendDeps):
-        self.config = OpenVikingMemoryConfig.model_validate(config)
-        self.backend = OpenVikingMemoryBackend(self.config, deps)
+    def __init__(self, config: dict[str, object], deps: MemoryRuntimeDeps):
+        self.config = OpenVikingProviderConfig.model_validate(config)
+        self.service = OpenVikingService(self.config, deps)
 
     def always_skill_names(self) -> list[str]:
         return ["openviking-memory"]
@@ -56,40 +54,34 @@ class OpenVikingProvider(MemoryProvider):
         chat_id: str | None,
         current_role: str,
     ) -> str:
-        prepared = await self.backend.prepare_turn(
-            session=session,
-            query=query,
-            channel=channel,
-            chat_id=chat_id,
-            current_role=current_role,
-        )
-        return "\n\n".join(prepared.system_sections)
+        return await self.service.build_recall_section(session=session, query=query)
 
     async def sync_turn(
         self,
         *,
         session: object,
-        raw_new_messages: list[dict[str, object]],
-        persisted_new_messages: list[dict[str, object]],
+        raw_new_messages: list[MessagePayload],
+        persisted_new_messages: list[MessagePayload],
         final_content: str | None,
     ) -> None:
-        await self.backend.after_turn(
+        await self.service.mirror_turn(
             session=session,
-            raw_new_messages=raw_new_messages,
             persisted_new_messages=persisted_new_messages,
-            final_content=final_content,
         )
 
     async def on_pre_compress(
         self,
         *,
         session: object,
-        pending_messages: list[dict[str, object]],
+        pending_messages: list[MessagePayload],
     ) -> None:
-        await self.backend.on_new_session(session=session, pending_messages=pending_messages)
+        await self.service.archive_pending_slice(
+            session=session,
+            pending_messages=pending_messages,
+        )
 
     async def shutdown(self) -> None:
-        await self.backend.close()
+        await self.service.shutdown()
 
     @classmethod
     def config_schema(cls) -> list[dict[str, object]]:
@@ -99,6 +91,7 @@ class OpenVikingProvider(MemoryProvider):
     def save_setup_values(cls, values: dict[str, object], loaded_config: Config) -> None:
         provider_values = loaded_config.memory.providers.setdefault(cls.name, {})
         provider_values.update(values)
+        provider_values.setdefault("ovConfig", {"storage": {}})
 
     def get_config_schema(self) -> list[dict[str, object]]:
         return self.config_schema()

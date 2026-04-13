@@ -6,7 +6,7 @@ from aeloon.core.agent.context import ContextBuilder
 from aeloon.core.agent.loop import AgentLoop
 from aeloon.core.bus.queue import MessageBus
 from aeloon.core.session.manager import Session, SessionManager
-from aeloon.memory.base import PreparedMemoryContext
+from aeloon.memory.types import TurnMemoryContext
 from aeloon.providers.base import LLMResponse
 
 
@@ -97,11 +97,11 @@ class _FakeMemoryManager:
         self.prepare_called = False
         self.after_turn_called = False
 
-    async def prepare_turn(self, **kwargs) -> PreparedMemoryContext:
+    async def prepare_turn(self, **kwargs) -> TurnMemoryContext:
         self.prepare_called = True
-        return PreparedMemoryContext(
+        return TurnMemoryContext(
             system_sections=["# Memory Recall\n\nnone"],
-            runtime_lines=["Memory backend: fake"],
+            runtime_lines=["Memory mode: fake"],
             always_skill_names=[],
             history_start_index=0,
         )
@@ -142,12 +142,13 @@ async def test_loop_uses_memory_manager_prepare_turn_before_llm(tmp_path) -> Non
         workspace=tmp_path,
         model="test-model",
     )
-    loop.tools.get_definitions = MagicMock(return_value=[])
-    loop.memory = _FakeMemoryManager()
+    object.__setattr__(loop.tools, "get_definitions", MagicMock(return_value=[]))
+    manager = _FakeMemoryManager()
+    setattr(loop, "memory", manager)
 
     await loop.process_direct("hello", session_key="cli:test")
 
-    assert loop.memory.prepare_called is True
+    assert manager.prepare_called is True
 
 
 @pytest.mark.asyncio

@@ -89,56 +89,56 @@ def _as_dict(value: object) -> dict[str, object]:
 
 def _migrate_memory_config(memory: dict[str, object]) -> None:
     prompt = _as_dict(memory.get("prompt"))
+    local = _as_dict(memory.get("local"))
     archive = _as_dict(memory.get("archive"))
     flush = _as_dict(memory.get("flush"))
     providers = _as_dict(memory.get("providers"))
-    backends = _as_dict(memory.get("backends"))
+    legacy_backends = _as_dict(memory.get("backends"))
 
     backend_raw = memory.get("backend")
-    backend = backend_raw.strip() if isinstance(backend_raw, str) else ""
+    legacy_backend = backend_raw.strip() if isinstance(backend_raw, str) else ""
     provider_raw = memory.get("provider")
     provider = provider_raw.strip() if isinstance(provider_raw, str) else ""
 
-    file_cfg = _as_dict(backends.get("file"))
-    if "enabled" not in prompt:
-        prompt["enabled"] = True
-    if "directory" not in prompt:
-        prompt["directory"] = file_cfg.get("memoryDir", "memory")
-    if "memoryFile" not in prompt:
-        prompt["memoryFile"] = "MEMORY.md"
-    if "userFile" not in prompt:
-        prompt["userFile"] = "USER.md"
-    if "memoryCharLimit" not in prompt:
-        prompt["memoryCharLimit"] = 2200
-    if "userCharLimit" not in prompt:
-        prompt["userCharLimit"] = 1375
+    file_cfg = _as_dict(legacy_backends.get("file"))
+    prompt.setdefault("enabled", True)
+    prompt.setdefault("directory", file_cfg.get("memoryDir", "memory"))
+    prompt.setdefault("memoryFile", file_cfg.get("longTermFilename", "MEMORY.md"))
+    prompt.setdefault("userFile", "USER.md")
+    prompt.setdefault("memoryCharLimit", 2200)
+    prompt.setdefault("userCharLimit", 1375)
 
-    if "enabled" not in archive:
-        archive["enabled"] = True
-    if "database" not in archive:
-        archive["database"] = "archive.db"
+    local.setdefault("historyFile", file_cfg.get("historyFilename", "HISTORY.md"))
+    local.setdefault(
+        "maxFailuresBeforeRawArchive",
+        file_cfg.get("maxFailuresBeforeRawArchive", 3),
+    )
+    local.setdefault("triggerRatio", file_cfg.get("triggerRatio", 1.0))
+    local.setdefault("targetRatio", file_cfg.get("targetRatio", 0.5))
+    local.setdefault(
+        "maxConsolidationRounds",
+        file_cfg.get("maxConsolidationRounds", 5),
+    )
 
-    if "enabled" not in flush:
-        flush["enabled"] = True
+    archive.setdefault("enabled", True)
+    archive.setdefault("database", "archive.db")
+    flush.setdefault("enabled", True)
 
-    if not provider and backend and backend != "file":
-        provider = backend
-    for backend_name, backend_value in backends.items():
+    if not provider and legacy_backend and legacy_backend != "file":
+        provider = legacy_backend
+
+    for backend_name, backend_value in legacy_backends.items():
         if backend_name == "file" or backend_name in providers:
             continue
         provider_cfg = _as_dict(backend_value)
         if provider_cfg:
             providers[backend_name] = provider_cfg
 
-    compat_backend = provider or "file"
-    compat_backends = {"file": file_cfg}
-    for provider_name, provider_value in providers.items():
-        compat_backends[provider_name] = _as_dict(provider_value)
-
     memory["prompt"] = prompt
+    memory["local"] = local
     memory["archive"] = archive
     memory["flush"] = flush
     memory["provider"] = provider or None
     memory["providers"] = providers
-    memory["backend"] = compat_backend
-    memory["backends"] = compat_backends
+    memory.pop("backend", None)
+    memory.pop("backends", None)

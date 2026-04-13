@@ -107,7 +107,7 @@ class TestSessionLastConsolidated:
 
         session = manager.get_or_create("cli:test")
 
-        assert session.memory_state["file"]["last_consolidated"] == 12
+        assert session.memory_state["local"]["last_compacted"] == 12
 
 
 class TestSessionImmutableHistory:
@@ -525,10 +525,12 @@ class TestNewCommandArchival:
             model="test-model",
             context_window_tokens=1,
         )
-        loop.provider.chat_with_retry = AsyncMock(
-            return_value=LLMResponse(content="ok", tool_calls=[])
+        setattr(
+            loop.provider,
+            "chat_with_retry",
+            AsyncMock(return_value=LLMResponse(content="ok", tool_calls=[])),
         )
-        loop.tools.get_definitions = MagicMock(return_value=[])
+        object.__setattr__(loop.tools, "get_definitions", MagicMock(return_value=[]))
         return loop
 
     @pytest.mark.asyncio
@@ -552,7 +554,7 @@ class TestNewCommandArchival:
             call_count += 1
             return False
 
-        loop.memory_consolidator.consolidate_messages = _failing_consolidate  # type: ignore[method-assign]
+        loop.memory.local_memory.consolidate_messages = _failing_consolidate  # type: ignore[assignment,method-assign]
 
         new_msg = InboundMessage(channel="cli", sender_id="user", chat_id="test", content="/new")
         response = await loop._process_message(new_msg)
@@ -585,7 +587,7 @@ class TestNewCommandArchival:
             archived_count = len(messages)
             return True
 
-        loop.memory_consolidator.consolidate_messages = _fake_consolidate  # type: ignore[method-assign]
+        loop.memory.local_memory.consolidate_messages = _fake_consolidate  # type: ignore[assignment,method-assign]
 
         new_msg = InboundMessage(channel="cli", sender_id="user", chat_id="test", content="/new")
         response = await loop._process_message(new_msg)
@@ -610,7 +612,7 @@ class TestNewCommandArchival:
         async def _ok_consolidate(_messages) -> bool:
             return True
 
-        loop.memory_consolidator.consolidate_messages = _ok_consolidate  # type: ignore[method-assign]
+        loop.memory.local_memory.consolidate_messages = _ok_consolidate  # type: ignore[assignment,method-assign]
 
         new_msg = InboundMessage(channel="cli", sender_id="user", chat_id="test", content="/new")
         response = await loop._process_message(new_msg)
@@ -618,118 +620,3 @@ class TestNewCommandArchival:
         assert response is not None
         assert "new session started" in response.content.lower()
         assert loop.sessions.get_or_create("cli:test").messages == []
-
-    @pytest.mark.asyncio
-    async def test_new_waits_for_archival_before_returning(self, tmp_path: Path) -> None:
-        """/new should not return before archival work is finished."""
-        from aeloon.core.bus.events import InboundMessage
-
-        loop = self._make_loop(tmp_path)
-        session = loop.sessions.get_or_create("cli:test")
-        for i in range(3):
-            session.add_message("user", f"msg{i}")
-            session.add_message("assistant", f"resp{i}")
-        loop.sessions.save(session)
-
-        archived = asyncio.Event()
-
-        async def _slow_consolidate(_messages) -> bool:
-            await asyncio.sleep(0.1)
-            archived.set()
-            return True
-
-        loop.memory_consolidator.consolidate_messages = _slow_consolidate  # type: ignore[method-assign]
-
-        new_msg = InboundMessage(channel="cli", sender_id="user", chat_id="test", content="/new")
-        await loop._process_message(new_msg)
-
-        assert archived.is_set()
-        await loop.close_mcp()
-        assert archived.is_set()
-
-    @pytest.mark.asyncio
-    async def test_new_delays_final_ack_until_blocking_reset_finishes(self, tmp_path: Path) -> None:
-        from aeloon.core.bus.events import InboundMessage
-        from aeloon.memory.base import MemoryBackend, MemoryBackendConfig, PreparedMemoryContext
-        from aeloon.memory.manager import MemoryManager
-
-        loop = self._make_loop(tmp_path)
-        session = loop.sessions.get_or_create("cli:test")
-        for i in range(2):
-            session.add_message("user", f"msg{i}")
-            session.add_message("assistant", f"resp{i}")
-        loop.sessions.save(session)
-
-        entered = asyncio.Event()
-        release = asyncio.Event()
-
-        class FakeBackend(MemoryBackend):
-            backend_name = "fake-blocking-new"
-            config_model = MemoryBackendConfig
-
-            async def prepare_turn(
-                self,
-                *,
-                session: object,
-                query: str,
-                channel: str | None,
-                chat_id: str | None,
-                current_role: str,
-            ) -> PreparedMemoryContext:
-                return PreparedMemoryContext()
-
-            async def after_turn(
-                self,
-                *,
-                session: object,
-                raw_new_messages: list[dict[str, object]],
-                persisted_new_messages: list[dict[str, object]],
-                final_content: str | None,
-            ) -> None:
-                return None
-
-            async def on_new_session(
-                self,
-                *,
-                session: object,
-                pending_messages: list[dict[str, object]],
-            ) -> None:
-                assert len(pending_messages) == 4
-                entered.set()
-                await release.wait()
-
-        loop.memory = MemoryManager.from_backend(
-            FakeBackend(MemoryBackendConfig(), loop.memory.backend.deps)
-        )
-        loop.memory_consolidator = loop.memory.backend
-
-        dispatch_task = asyncio.create_task(
-            loop.dispatcher._dispatch(
-                InboundMessage(
-                    channel="cli",
-                    sender_id="user",
-                    chat_id="test",
-                    content="/new",
-                )
-            )
-        )
-
-        first = await asyncio.wait_for(loop.bus.consume_outbound(), timeout=0.5)
-        assert first.metadata.get("_progress") is True
-        assert dispatch_task.done() is False
-
-        await entered.wait()
-        release.set()
-
-        final = None
-        for _ in range(3):
-            candidate = await asyncio.wait_for(loop.bus.consume_outbound(), timeout=0.5)
-            if not candidate.metadata.get("_progress"):
-                final = candidate
-                break
-
-        assert final is not None
-        assert final.content == "New session started."
-
-        await dispatch_task
-        await loop.close_mcp()

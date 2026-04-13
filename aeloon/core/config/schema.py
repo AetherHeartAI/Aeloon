@@ -136,10 +136,6 @@ class ExecToolConfig(Base):
     path_append: str = ""
 
 
-def _default_memory_backends() -> dict[str, dict[str, object]]:
-    return {"file": {}}
-
-
 class PromptMemoryConfig(Base):
     """Always-on local prompt memory settings."""
 
@@ -149,6 +145,20 @@ class PromptMemoryConfig(Base):
     user_file: str = Field(default="USER.md", alias="userFile")
     memory_char_limit: int = Field(default=2200, alias="memoryCharLimit")
     user_char_limit: int = Field(default=1375, alias="userCharLimit")
+
+
+class LocalMemoryConfig(Base):
+    """Fixed local-memory compaction settings."""
+
+    history_file: str = Field(default="HISTORY.md", alias="historyFile")
+    max_failures_before_raw_archive: int = Field(
+        default=3,
+        alias="maxFailuresBeforeRawArchive",
+        ge=1,
+    )
+    trigger_ratio: float = Field(default=1.0, alias="triggerRatio")
+    target_ratio: float = Field(default=0.5, alias="targetRatio")
+    max_consolidation_rounds: int = Field(default=5, alias="maxConsolidationRounds", ge=1)
 
 
 class SessionArchiveConfig(Base):
@@ -165,45 +175,28 @@ class MemoryFlushConfig(Base):
 
 
 class MemoryConfig(Base):
-    """Layered memory config with backend-compatibility aliases."""
+    """Layered memory config with fixed local memory plus optional provider."""
 
     prompt: PromptMemoryConfig = Field(default_factory=PromptMemoryConfig)
+    local: LocalMemoryConfig = Field(default_factory=LocalMemoryConfig)
     archive: SessionArchiveConfig = Field(default_factory=SessionArchiveConfig)
     flush: MemoryFlushConfig = Field(default_factory=MemoryFlushConfig)
     provider: str | None = None
     providers: dict[str, dict[str, object]] = Field(default_factory=dict)
-    backend: str = "file"
-    backends: dict[str, dict[str, object]] = Field(default_factory=_default_memory_backends)
 
     @model_validator(mode="after")
-    def validate_selected_backend(self) -> "MemoryConfig":
-        explicit_backend = "backend" in self.model_fields_set
-        if self.provider is None and self.backend != "file":
-            self.provider = self.backend
-
-        if self.provider is not None:
-            if self.provider not in self.providers:
-                raw_provider = self.backends.get(self.provider)
-                if raw_provider is None:
-                    raise ValueError(
-                        f"memory.providers.{self.provider} is required when "
-                        f"memory.provider='{self.provider}'"
-                    )
-                self.providers[self.provider] = dict(raw_provider)
-            if not explicit_backend:
-                self.backend = self.provider
-        elif not explicit_backend:
-            self.backend = "file"
-
-        compat_backends = dict(self.backends)
-        compat_backends.setdefault("file", {})
-        if self.provider is not None:
-            compat_backends[self.provider] = dict(self.providers[self.provider])
-        self.backends = compat_backends
+    def validate_provider(self) -> "MemoryConfig":
+        provider = self.provider.strip() if isinstance(self.provider, str) else ""
+        self.provider = provider or None
 
         if self.provider == "openviking" and "openviking" not in self.providers:
             raise ValueError(
                 "memory.providers.openviking is required when memory.provider='openviking'"
+            )
+        if self.provider is not None and self.provider not in self.providers:
+            raise ValueError(
+                f"memory.providers.{self.provider} is required when "
+                f"memory.provider='{self.provider}'"
             )
         return self
 

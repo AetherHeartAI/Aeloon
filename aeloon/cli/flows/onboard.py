@@ -11,43 +11,6 @@ from aeloon.core.config.paths import get_workspace_path
 from aeloon.core.config.schema import Config
 from aeloon.utils.helpers import sync_workspace_templates
 
-
-def _openviking_backend_template() -> dict[str, object]:
-    return {
-        "ovConfig": {
-            "storage": {},
-            "vlm": {
-                "provider": "",
-                "api_key": "",
-                "model": "",
-            },
-            "embedding": {
-                "dense": {
-                    "provider": "",
-                    "api_key": "",
-                    "model": "",
-                    "dimension": 1024,
-                    "input": "multimodal",
-                }
-            },
-        },
-        "searchMode": "search",
-        "searchLimit": 3,
-        "scoreThreshold": None,
-        "targetUri": "viking://user/default/memories/",
-        "extraTargetUris": [],
-        "maxCommitRounds": 5,
-        "recallTimeoutS": 20.0,
-        "waitProcessedTimeoutS": 30.0,
-    }
-
-
-def _ensure_memory_backend_discoverability(loaded: Config) -> Config:
-    loaded.memory.backends.setdefault("file", {})
-    loaded.memory.backends.setdefault("openviking", _openviking_backend_template())
-    return loaded
-
-
 def _print_memory_backend_guidance(config_path: Path) -> None:
     console.print("\nMemory layers:")
     console.print("  - [cyan]prompt memory[/cyan]: local `memory/MEMORY.md` + `memory/USER.md`")
@@ -84,19 +47,16 @@ def run_onboard(*, workspace: str | None, config: str | None) -> None:
         )
         if __import__("typer").confirm("Overwrite?"):
             loaded = _apply_workspace_override(Config())
-            loaded = _ensure_memory_backend_discoverability(loaded)
             save_config(loaded, config_path)
             console.print(f"[green]✓[/green] Config reset to defaults at {config_path}")
         else:
             loaded = _apply_workspace_override(load_config(config_path))
-            loaded = _ensure_memory_backend_discoverability(loaded)
             save_config(loaded, config_path)
             console.print(
                 f"[green]✓[/green] Config refreshed at {config_path} (existing values preserved)"
             )
     else:
         loaded = _apply_workspace_override(Config())
-        loaded = _ensure_memory_backend_discoverability(loaded)
         save_config(loaded, config_path)
         console.print(f"[green]✓[/green] Created config at {config_path}")
 

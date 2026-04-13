@@ -77,7 +77,6 @@ def setup_memory(
             secret_values[str(field["env_var"])] = value
         else:
             non_secret_values[key] = value
-    loaded.memory.backend = "file"
     loaded.memory.provider = provider_name
     _save_provider_values(provider_name, non_secret_values, loaded)
     save_config(loaded, config_path)
@@ -107,7 +106,6 @@ def memory_off(
     config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
 ) -> None:
     loaded, config_path = _load_config_for_memory(config)
-    loaded.memory.backend = "file"
     loaded.memory.provider = None
     save_config(loaded, config_path)
     console.print("Memory provider disabled.")

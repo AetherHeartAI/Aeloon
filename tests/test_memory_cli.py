@@ -33,8 +33,9 @@ def test_memory_setup_writes_provider_config_and_env(tmp_path: Path) -> None:
     env_text = (config_path.parent / ".env").read_text(encoding="utf-8")
 
     assert saved["memory"]["provider"] == "openviking"
-    assert saved["memory"]["backend"] == "file"
     assert saved["memory"]["providers"]["openviking"]["searchMode"] == "search"
+    assert "backend" not in saved["memory"]
+    assert "backends" not in saved["memory"]
     assert "OPENVIKING_API_KEY=secret-key" in env_text
 
 
@@ -45,7 +46,6 @@ def test_memory_status_reports_planes_and_profile(tmp_path: Path) -> None:
         json.dumps(
             {
                 "memory": {
-                    "backend": "file",
                     "provider": "openviking",
                     "providers": {"openviking": {"searchMode": "search"}},
                 }
@@ -69,7 +69,11 @@ def test_memory_off_disables_provider(tmp_path: Path) -> None:
         json.dumps(
             {
                 "memory": {
-                    "backend": "file",
+                    "backend": "openviking",
+                    "backends": {
+                        "file": {"memoryDir": "memory"},
+                        "openviking": {"searchMode": "search"},
+                    },
                     "provider": "openviking",
                     "providers": {"openviking": {"searchMode": "search"}},
                 }
@@ -83,3 +87,6 @@ def test_memory_off_disables_provider(tmp_path: Path) -> None:
     assert result.exit_code == 0
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["memory"]["provider"] is None
+    assert saved["memory"]["providers"]["openviking"]["searchMode"] == "search"
+    assert "backend" not in saved["memory"]
+    assert "backends" not in saved["memory"]

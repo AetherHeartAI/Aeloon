@@ -13,14 +13,8 @@ from aeloon.core.agent.context import ContextBuilder
 from aeloon.core.agent.output_manager import OutputManager
 from aeloon.core.config.schema import MemoryConfig
 from aeloon.core.session.manager import Session, SessionManager
-from aeloon.memory.base import (
-    MemoryBackend,
-    MemoryBackendConfig,
-    MemoryBackendDeps,
-    PreparedMemoryContext,
-)
-from aeloon.memory.manager import MemoryManager
-from aeloon.memory.registry import register_backend
+from aeloon.memory.runtime import MemoryRuntime
+from aeloon.memory.types import MemoryRuntimeDeps, TurnMemoryContext
 from aeloon.providers.base import LLMProvider, LLMResponse
 from aeloon.utils.helpers import sync_workspace_templates
 
@@ -104,12 +98,7 @@ def test_context_builder_accepts_backend_runtime_lines(tmp_path) -> None:
     assert "MEMORY.md" not in prompt
     assert "HISTORY.md" not in prompt
 
-
-@register_backend
-class _FakePromptBackend(MemoryBackend):
-    backend_name = "fake-prompt"
-    config_model = MemoryBackendConfig
-
+class _FakePromptLocalMemory:
     async def prepare_turn(
         self,
         *,
@@ -118,10 +107,10 @@ class _FakePromptBackend(MemoryBackend):
         channel: str | None,
         chat_id: str | None,
         current_role: str,
-    ) -> PreparedMemoryContext:
-        return PreparedMemoryContext(
+    ) -> TurnMemoryContext:
+        return TurnMemoryContext(
             system_sections=["# Memory Recall\n\nnone"],
-            runtime_lines=["Memory backend: fake"],
+            runtime_lines=["Memory mode: fake"],
             always_skill_names=[],
         )
 
@@ -135,10 +124,30 @@ class _FakePromptBackend(MemoryBackend):
     ) -> None:
         return None
 
+    def pending_start_index(self, session: object) -> int:
+        return 0
 
-async def _make_prepared_context(tmp_path: Path) -> PreparedMemoryContext:
+    def estimate_session_prompt_tokens(self, session: Session) -> tuple[int, str]:
+        return (0, "none")
+
+    async def on_new_session(
+        self,
+        *,
+        session: object,
+        pending_messages: list[dict[str, object]],
+    ) -> None:
+        return None
+
+    async def maybe_compact_by_tokens(self, session: Session) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+
+async def _make_prepared_context(tmp_path: Path) -> TurnMemoryContext:
     workspace = _make_workspace(tmp_path)
-    deps = MemoryBackendDeps(
+    deps = MemoryRuntimeDeps(
         workspace=workspace,
         provider=_DummyProvider(),
         model="test-model",
@@ -147,15 +156,22 @@ async def _make_prepared_context(tmp_path: Path) -> PreparedMemoryContext:
         build_messages=lambda **_kwargs: [],
         get_tool_definitions=lambda: [],
     )
-    manager = MemoryManager(
-        memory_config=MemoryConfig(
-            backend="fake-prompt",
-            backends={"fake-prompt": {}},
+    runtime = MemoryRuntime(
+        memory_config=MemoryConfig.model_validate(
+            {
+                "prompt": {"enabled": False},
+                "archive": {"enabled": False},
+                "flush": {"enabled": False},
+            }
         ),
         deps=deps,
+        local_memory=_FakePromptLocalMemory(),
+        prompt_memory=None,
+        session_archive=None,
+        flush_coordinator=None,
     )
     try:
-        return await manager.prepare_turn(
+        return await runtime.prepare_turn(
             session=Session(key="cli:test"),
             query="hello",
             channel="cli",
@@ -163,7 +179,7 @@ async def _make_prepared_context(tmp_path: Path) -> PreparedMemoryContext:
             current_role="user",
         )
     finally:
-        await manager.close()
+        await runtime.close()
 
 
 @pytest.mark.asyncio
@@ -179,7 +195,7 @@ async def test_fake_backend_prompt_stays_free_of_file_memory_defaults(tmp_path) 
         extra_always_skills=prepared.always_skill_names,
     )
 
-    assert "Memory backend: fake" in prompt
+    assert "Memory mode: fake" in prompt
     assert "# Memory Recall" in prompt
     assert "MEMORY.md" not in prompt
     assert "HISTORY.md" not in prompt

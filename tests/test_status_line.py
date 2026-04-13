@@ -9,7 +9,7 @@ and StatusPlugin registration.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -42,7 +42,11 @@ def _make_loop(tmp_path: Path) -> AgentLoop:
         }
     )
     loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path, model="test-model")
-    loop.memory_consolidator.maybe_consolidate_by_tokens = MagicMock(return_value=None)
+    object.__setattr__(
+        loop.memory.local_memory,
+        "maybe_compact_by_tokens",
+        MagicMock(return_value=None),
+    )
     return loop
 
 
@@ -145,13 +149,11 @@ class TestStatusLineManager:
         loop = _make_loop(tmp_path)
         session = loop.sessions.get_or_create("cli:direct")
         session.messages = [{"role": "user", "content": "x" * 1000}]
-        loop.memory_consolidator.estimate_session_prompt_tokens = MagicMock(
-            return_value=(60000, "mock")
-        )
         loop.context_window_tokens = 65536
 
         mgr = StatusLineManager(loop)
-        result = mgr.build_toolbar("cli", "direct")
+        with patch.object(loop.memory, "estimate_session_prompt_tokens", return_value=(60000, "mock")):
+            result = mgr.build_toolbar("cli", "direct")
 
         # Find the context part — should have ansired style
         styles = [part[0] for part in result]

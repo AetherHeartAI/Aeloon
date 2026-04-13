@@ -5,15 +5,25 @@ from pathlib import Path
 import pytest
 
 from aeloon.core.session.manager import Session
-from aeloon.providers.base import LLMResponse, ToolCallRequest
+from aeloon.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 
-class _FlushProvider:
+class _FlushProvider(LLMProvider):
     def __init__(self) -> None:
+        super().__init__()
         self.messages: list[list[dict[str, object]]] = []
         self.tools: list[list[dict[str, object]] | None] = []
 
-    async def chat_with_retry(self, *, messages, tools=None, model=None, **kwargs) -> LLMResponse:
+    async def chat(
+        self,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]] | None = None,
+        model: str | None = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+        reasoning_effort: str | None = None,
+        tool_choice: str | dict[str, object] | None = None,
+    ) -> LLMResponse:
         self.messages.append(messages)
         self.tools.append(tools)
         return LLMResponse(
@@ -30,6 +40,9 @@ class _FlushProvider:
                 )
             ],
         )
+
+    def get_default_model(self) -> str:
+        return "test-model"
 
 
 @pytest.mark.asyncio
@@ -60,19 +73,22 @@ async def test_memory_flush_coordinator_writes_prompt_memory(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_file_backend_calls_flush_before_consolidation(tmp_path: Path) -> None:
+async def test_local_memory_runtime_calls_flush_before_compaction(tmp_path: Path) -> None:
+    from aeloon.core.config.schema import LocalMemoryConfig, PromptMemoryConfig
     from aeloon.core.session.manager import SessionManager
-    from aeloon.memory.backends.file import FileMemoryBackend, FileMemoryConfig
-    from aeloon.memory.base import MemoryBackendDeps
+    from aeloon.memory import local_runtime as local_runtime_module
+    from aeloon.memory.local_runtime import LocalMemoryRuntime
+    from aeloon.memory.types import MemoryRuntimeDeps
 
     calls: list[tuple[str, int]] = []
 
     async def _flush_before_loss(*, session, pending_messages, reason) -> None:
         calls.append((reason, len(pending_messages)))
 
-    backend = FileMemoryBackend(
-        FileMemoryConfig(triggerRatio=0.0, targetRatio=0.0, maxConsolidationRounds=1),
-        MemoryBackendDeps(
+    runtime = LocalMemoryRuntime(
+        config=LocalMemoryConfig(triggerRatio=0.0, targetRatio=0.0, maxConsolidationRounds=1),
+        prompt_config=PromptMemoryConfig(),
+        deps=MemoryRuntimeDeps(
             workspace=tmp_path,
             provider=_FlushProvider(),
             model="test-model",
@@ -83,9 +99,9 @@ async def test_file_backend_calls_flush_before_consolidation(tmp_path: Path) -> 
             flush_before_loss=_flush_before_loss,
         ),
     )
-    backend.consolidate_messages = lambda messages: __import__("asyncio").sleep(0, result=True)  # type: ignore[method-assign]
-    backend.estimate_session_prompt_tokens = lambda _session: (10, "test")  # type: ignore[method-assign]
-    backend.pick_consolidation_boundary = lambda _session, _tokens: (2, 5)  # type: ignore[method-assign]
+    runtime.consolidate_messages = lambda messages: __import__("asyncio").sleep(0, result=True)  # type: ignore[assignment,method-assign]
+    runtime.estimate_session_prompt_tokens = lambda _session: (10, "test")  # type: ignore[assignment,method-assign]
+    runtime.pick_compaction_boundary = lambda _session, _tokens: (2, 5)  # type: ignore[assignment,method-assign]
     session = Session(key="cli:test")
     session.messages = [
         {"role": "user", "content": "first"},
@@ -93,7 +109,12 @@ async def test_file_backend_calls_flush_before_consolidation(tmp_path: Path) -> 
         {"role": "user", "content": "third"},
     ]
 
-    await backend.maybe_consolidate_by_tokens(session)
+    original = local_runtime_module.estimate_message_tokens
+    local_runtime_module.estimate_message_tokens = lambda _message: 1  # type: ignore[assignment]
+    try:
+        await runtime.maybe_compact_by_tokens(session)
+    finally:
+        local_runtime_module.estimate_message_tokens = original
 
     assert calls
     assert calls[0][0] == "compression"

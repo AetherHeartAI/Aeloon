@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 
 from aeloon.core.config.schema import Config
-from aeloon.core.session.manager import Session
+from aeloon.core.session.manager import Session, SessionManager
+from aeloon.memory.types import MemoryRuntimeDeps
 from aeloon.providers.base import LLMProvider, LLMResponse
 
 
@@ -26,11 +27,8 @@ class _DummyProvider(LLMProvider):
         return "test-model"
 
 
-def _make_deps(tmp_path: Path):
-    from aeloon.core.session.manager import SessionManager
-    from aeloon.memory.base import MemoryBackendDeps
-
-    return MemoryBackendDeps(
+def _make_deps(tmp_path: Path) -> MemoryRuntimeDeps:
+    return MemoryRuntimeDeps(
         workspace=tmp_path,
         provider=_DummyProvider(),
         model="test-model",
@@ -81,7 +79,7 @@ async def test_runtime_provider_mode_is_additive_not_replacement(
             chat_id: str | None,
             current_role: str,
         ) -> str:
-            return "Provider recall hit."
+            return "# OpenViking Recall\n\n- Provider recall hit."
 
         def always_skill_names(self) -> list[str]:
             return ["openviking-memory"]
@@ -94,9 +92,8 @@ async def test_runtime_provider_mode_is_additive_not_replacement(
     cfg = Config.model_validate(
         {
             "memory": {
-                "backend": "file",
                 "provider": "openviking",
-                "providers": {"openviking": {}},
+                "providers": {"openviking": {"ovConfig": {"storage": {}}}},
             }
         }
     )
@@ -110,6 +107,7 @@ async def test_runtime_provider_mode_is_additive_not_replacement(
         current_role="user",
     )
 
+    assert runtime.local_memory is not None
     assert any(
         "Local prompt memory stays active." in section for section in prepared.system_sections
     )

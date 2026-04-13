@@ -156,6 +156,35 @@ def test_load_config_migrates_legacy_memory_backend_shape(tmp_path) -> None:
     config = load_config(config_path)
 
     assert config.memory.prompt.directory == "notes"
+    assert config.memory.local.history_file == "HISTORY.md"
     assert config.memory.archive.enabled is True
     assert config.memory.provider == "openviking"
     assert config.memory.providers["openviking"]["searchMode"] == "search"
+    assert not hasattr(config.memory, "backend")
+    assert not hasattr(config.memory, "backends")
+
+
+def test_save_config_drops_legacy_memory_backend_fields_after_migration(tmp_path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "memory": {
+                    "backend": "file",
+                    "backends": {
+                        "file": {"memoryDir": "notes", "historyFilename": "ARCHIVE.md"},
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+    save_config(config, config_path)
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+
+    assert saved["memory"]["prompt"]["directory"] == "notes"
+    assert saved["memory"]["local"]["historyFile"] == "ARCHIVE.md"
+    assert "backend" not in saved["memory"]
+    assert "backends" not in saved["memory"]

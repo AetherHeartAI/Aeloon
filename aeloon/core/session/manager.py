@@ -32,21 +32,55 @@ class Session:
     metadata: dict[str, Any] = field(default_factory=dict)
     memory_state: dict[str, Any] = field(default_factory=dict)
 
-    def _file_memory_state(self) -> dict[str, Any]:
-        file_state = self.memory_state.setdefault("file", {})
-        if not isinstance(file_state, dict):
-            file_state = {}
-            self.memory_state["file"] = file_state
-        return file_state
+    def _local_memory_state(self, *, create: bool = True) -> dict[str, Any]:
+        raw_local_state = self.memory_state.get("local")
+        if isinstance(raw_local_state, dict):
+            local_state = raw_local_state
+        else:
+            local_state = {}
+            if create:
+                self.memory_state["local"] = local_state
+
+        legacy_file_state = self.memory_state.get("file")
+        if "last_compacted" not in local_state and isinstance(legacy_file_state, dict):
+            raw_value = legacy_file_state.get("last_consolidated", 0)
+            if isinstance(raw_value, int):
+                local_state = dict(local_state)
+                local_state["last_compacted"] = raw_value
+                if create:
+                    self.memory_state["local"] = local_state
+        return local_state
+
+    @property
+    def last_compacted(self) -> int:
+        raw_value = self._local_memory_state(create=False).get("last_compacted", 0)
+        return raw_value if isinstance(raw_value, int) else 0
+
+    @last_compacted.setter
+    def last_compacted(self, value: int) -> None:
+        self._local_memory_state()["last_compacted"] = value
 
     @property
     def last_consolidated(self) -> int:
-        raw_value = self._file_memory_state().get("last_consolidated", 0)
-        return raw_value if isinstance(raw_value, int) else 0
+        return self.last_compacted
 
     @last_consolidated.setter
     def last_consolidated(self, value: int) -> None:
-        self._file_memory_state()["last_consolidated"] = value
+        self.last_compacted = value
+
+    def normalize_memory_state(self) -> None:
+        self._local_memory_state()
+        legacy_file_state = self.memory_state.get("file")
+        if isinstance(legacy_file_state, dict) and "last_consolidated" in legacy_file_state:
+            trimmed = dict(legacy_file_state)
+            trimmed.pop("last_consolidated", None)
+            if trimmed:
+                self.memory_state["file"] = trimmed
+            else:
+                self.memory_state.pop("file", None)
+        local_state = self.memory_state.get("local")
+        if isinstance(local_state, dict) and not local_state:
+            self.memory_state.pop("local", None)
 
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
         """Add a message to the session."""
@@ -84,7 +118,7 @@ class Session:
         max_messages: int = 500,
     ) -> list[dict[str, Any]]:
         """Return unconsolidated messages for LLM input, aligned to a legal tool-call boundary."""
-        history_start = self.last_consolidated if start_index is None else start_index
+        history_start = self.last_compacted if start_index is None else start_index
         unconsolidated = self.messages[history_start:]
         sliced = unconsolidated[-max_messages:] if max_messages else list(unconsolidated)
 
@@ -203,7 +237,7 @@ class SessionManager:
 
                         if "memory_state" not in data:
                             memory_state = {
-                                "file": {"last_consolidated": data.get("last_consolidated", 0)}
+                                "local": {"last_compacted": data.get("last_consolidated", 0)}
                             }
                     else:
                         messages.append(data)
@@ -222,6 +256,7 @@ class SessionManager:
     def save(self, session: Session) -> None:
         """Save a session to disk."""
         path = self._get_session_path(session.key)
+        session.normalize_memory_state()
 
         with open(path, "w", encoding="utf-8") as f:
             metadata_line = {

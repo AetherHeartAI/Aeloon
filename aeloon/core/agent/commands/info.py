@@ -2,39 +2,31 @@
 
 from __future__ import annotations
 
-from aeloon.cli.registry import CommandSpec
-from aeloon.core.agent.commands import BuiltinHandlerMap, CommandEnv
-from aeloon.core.bus.events import InboundMessage, OutboundMessage
-
-SPECS: tuple[CommandSpec, ...] = (
-    CommandSpec(name="status", help="Show channel status", slash_path=("status",)),
-    CommandSpec(name="help", help="Show available commands", slash_path=("help",)),
-)
+from aeloon.core.agent.commands._context import CommandContext
+from aeloon.core.agent.commands._decorator import slash_command
 
 
-async def handle_help(env: CommandEnv, msg: InboundMessage, _args_str: str) -> OutboundMessage:
+@slash_command(name="help", help="Show available commands", slash_path=("help",))
+async def handle_help(ctx: CommandContext, _args_str: str) -> str | None:
     """Render built-in and plugin slash command help."""
-    plugin_catalog = env.plugin_catalog_fn()
+    plugin_catalog = ctx.plugin_catalog_fn()
     lines = [
         "# ♥️ aeloon",
         "",
         "## Commands",
         "",
     ]
-    lines.extend(env.builtin_catalog.render_help_lines())
+    lines.extend(ctx.builtin_catalog.render_help_lines())
 
     plugin_lines = plugin_catalog.render_help_lines()
     if plugin_lines:
         lines.extend(["", "## Plugins", ""])
         lines.extend(plugin_lines)
-    return OutboundMessage(
-        channel=msg.channel,
-        chat_id=msg.chat_id,
-        content="\n".join(lines),
-    )
+    return "\n".join(lines)
 
 
-async def handle_status(env: CommandEnv, msg: InboundMessage, _args_str: str) -> OutboundMessage:
+@slash_command(name="status", help="Show channel status", slash_path=("status",))
+async def handle_status(ctx: CommandContext, _args_str: str) -> str | None:
     """Show runtime, channel, and plugin state."""
     state_icons = {
         "pending": "⏳",
@@ -45,23 +37,23 @@ async def handle_status(env: CommandEnv, msg: InboundMessage, _args_str: str) ->
     }
 
     lines: list[str] = ["Runtime Status:"]
-    session_key = f"{msg.channel}:{msg.chat_id}"
     try:
-        session = env.sessions.get_or_create(session_key)
-        estimated, _source = env.memory_consolidator.estimate_session_prompt_tokens(session)
+        session = ctx.sessions.get_or_create(ctx.session_key)
+        memory = ctx.memory
+        estimated, _source = memory.estimate_session_prompt_tokens(session) if memory else (0, "none")
     except Exception:
         estimated = 0
-    context_total = max(0, int(env.context_window_tokens))
+    context_total = max(0, int(ctx.context_window_tokens))
     ratio = (estimated / context_total * 100) if context_total > 0 else 0.0
-    lines.append(f"Model: {env.model}")
+    lines.append(f"Model: {ctx.model}")
     lines.append(f"Context: {estimated}/{context_total} ({ratio:.0f}%)")
 
     lines.append("")
     lines.append("Channel Status:")
-    if env.channel_manager is None:
+    if ctx.channel_manager is None:
         lines.append("Channel status is not available (no channel manager).")
     else:
-        status = env.channel_manager.get_status()
+        status = ctx.channel_manager.get_status()
         if not status:
             lines.append("No channels configured.")
         else:
@@ -73,7 +65,7 @@ async def handle_status(env: CommandEnv, msg: InboundMessage, _args_str: str) ->
                     line += f" — {info['error']}"
                 lines.append(line)
 
-    pm = env.plugin_manager
+    pm = ctx.plugin_manager
     if pm:
         service_lines: list[str] = []
         for full_id, service in sorted(pm.registry.services.items()):
@@ -84,14 +76,4 @@ async def handle_status(env: CommandEnv, msg: InboundMessage, _args_str: str) ->
             lines.append("Plugin Status:")
             lines.extend(service_lines)
 
-    return OutboundMessage(
-        channel=msg.channel,
-        chat_id=msg.chat_id,
-        content="\n".join(lines),
-    )
-
-
-HANDLERS: BuiltinHandlerMap = {
-    "help": handle_help,
-    "status": handle_status,
-}
+    return "\n".join(lines)

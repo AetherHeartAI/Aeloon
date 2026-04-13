@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -18,7 +18,11 @@ def _make_loop(tmp_path) -> tuple[AgentLoop, MessageBus]:
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
     loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path, model="test-model")
-    loop.memory_consolidator.maybe_consolidate_by_tokens = AsyncMock(return_value=None)
+    object.__setattr__(
+        loop.memory.local_memory,
+        "maybe_compact_by_tokens",
+        AsyncMock(return_value=None),
+    )
     return loop, bus
 
 
@@ -53,32 +57,39 @@ async def test_profile_slash_command_status(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_profile_slash_command_status_uses_deep_profile_report(tmp_path) -> None:
+    from aeloon.core.agent.profiler import ProfileReport
+
     loop, _ = _make_loop(tmp_path)
     loop.profiler.enabled = True
     loop.runtime_settings.output_mode = "deep-profile"
-    loop.profiler._last_report = object()
-    loop.profiler.report_deep_profile = MagicMock(return_value="Deep Profile Report")
+    loop.profiler._last_report = ProfileReport()
     msg = InboundMessage(channel="cli", sender_id="u", chat_id="c", content="/profile")
 
-    resp = await loop._process_message(msg)
+    with patch.object(
+        loop.profiler,
+        "report_deep_profile",
+        return_value="Deep Profile Report",
+    ) as report_deep_profile:
+        resp = await loop._process_message(msg)
 
     assert resp is not None
     assert "profiling is enabled" in resp.content.lower()
     assert "current profile mode: deep-profile." in resp.content.lower()
     assert "Deep Profile Report" in resp.content
-    loop.profiler.report_deep_profile.assert_called_once_with()
+    report_deep_profile.assert_called_once_with()
 
 
 @pytest.mark.asyncio
 async def test_profile_enabled_emits_metadata_report(tmp_path) -> None:
     loop, bus = _make_loop(tmp_path)
     loop.profiler.enabled = True
-    loop.provider.chat_with_retry = AsyncMock(
-        return_value=LLMResponse(content="hello", tool_calls=[])
-    )
-
     msg = InboundMessage(channel="cli", sender_id="u", chat_id="c", content="hello")
-    response = await loop._process_message(msg)
+    with patch.object(
+        loop.provider,
+        "chat_with_retry",
+        AsyncMock(return_value=LLMResponse(content="hello", tool_calls=[])),
+    ):
+        response = await loop._process_message(msg)
 
     assert response is not None
     # Consume "Thinking..." progress emitted before the first LLM call

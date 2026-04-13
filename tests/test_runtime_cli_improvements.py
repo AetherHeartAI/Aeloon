@@ -26,7 +26,11 @@ def _make_loop(tmp_path) -> AgentLoop:
         }
     )
     loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path, model="test-model")
-    loop.memory_consolidator.maybe_consolidate_by_tokens = AsyncMock(return_value=None)
+    object.__setattr__(
+        loop.memory.local_memory,
+        "maybe_compact_by_tokens",
+        AsyncMock(return_value=None),
+    )
     return loop
 
 
@@ -77,11 +81,10 @@ def test_build_bottom_toolbar_includes_model_and_context(tmp_path) -> None:
     loop = _make_loop(tmp_path)
     session = loop.sessions.get_or_create("cli:direct")
     session.messages = [{"role": "user", "content": "hello"}]
-    loop.memory_consolidator.estimate_session_prompt_tokens = MagicMock(return_value=(123, "mock"))
-
-    toolbar = agent_flow._build_bottom_toolbar(loop, "cli", "direct")
-    rendered = toolbar()
-    rendered_text = "".join(part[1] for part in rendered)
+    with patch.object(loop.memory, "estimate_session_prompt_tokens", return_value=(123, "mock")):
+        toolbar = agent_flow._build_bottom_toolbar(loop, "cli", "direct")
+        rendered = toolbar()
+        rendered_text = "".join(part[1] for part in rendered)
 
     assert "Model:" in rendered_text
     assert "test-model" in rendered_text

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from aeloon.core.config.schema import MemoryConfig
-from aeloon.memory.base import MemoryBackendDeps
 from aeloon.memory.providers.base import MemoryProvider
+from aeloon.memory.types import MemoryRuntimeDeps, MessagePayload
 
 
 class ProviderManager:
@@ -14,7 +14,7 @@ class ProviderManager:
         self._provider: MemoryProvider | None = None
 
     @classmethod
-    def from_config(cls, memory_config: MemoryConfig, deps: MemoryBackendDeps) -> "ProviderManager":
+    def from_config(cls, memory_config: MemoryConfig, deps: MemoryRuntimeDeps) -> "ProviderManager":
         manager = cls()
         if memory_config.provider:
             provider = manager.build_active_provider(
@@ -34,7 +34,7 @@ class ProviderManager:
         self,
         name: str,
         config: dict[str, object],
-        deps: MemoryBackendDeps,
+        deps: MemoryRuntimeDeps,
     ) -> MemoryProvider:
         if name == "openviking":
             from aeloon.memory.providers.openviking import OpenVikingProvider
@@ -76,8 +76,8 @@ class ProviderManager:
         self,
         *,
         session: object,
-        raw_new_messages: list[dict[str, object]],
-        persisted_new_messages: list[dict[str, object]],
+        raw_new_messages: list[MessagePayload],
+        persisted_new_messages: list[MessagePayload],
         final_content: str | None,
     ) -> None:
         if self._provider is None:
@@ -93,7 +93,7 @@ class ProviderManager:
         self,
         *,
         session: object,
-        pending_messages: list[dict[str, object]],
+        pending_messages: list[MessagePayload],
     ) -> None:
         if self._provider is None:
             return

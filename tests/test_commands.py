@@ -127,29 +127,14 @@ def test_onboard_fresh_install(mock_paths, monkeypatch) -> None:
     assert (workspace_dir / "outputs").exists()
     saved = Config.model_validate(json.loads(config_file.read_text(encoding="utf-8")))
     raw_saved = json.loads(config_file.read_text(encoding="utf-8"))
-    openviking = raw_saved["memory"]["backends"]["openviking"]
-    dense = openviking["ovConfig"]["embedding"]["dense"]
     expected_workspace = Config().workspace_path
     stripped_output = _strip_ansi(result.stdout).lower()
 
-    assert saved.memory.backend == "file"
-    assert "file" in saved.memory.backends
-    assert "openviking" in saved.memory.backends
-    assert openviking["ovConfig"]["storage"] == {}
-    assert openviking["ovConfig"]["vlm"] == {"provider": "", "api_key": "", "model": ""}
-    assert dense["provider"] == ""
-    assert dense["api_key"] == ""
-    assert dense["model"] == ""
-    assert dense["dimension"] == 1024
-    assert dense["input"] == "multimodal"
-    assert openviking["searchMode"] == "search"
-    assert openviking["searchLimit"] == 3
-    assert openviking["scoreThreshold"] is None
-    assert openviking["targetUri"] == "viking://user/default/memories/"
-    assert openviking["extraTargetUris"] == []
-    assert openviking["maxCommitRounds"] == 5
-    assert openviking["recallTimeoutS"] == 20.0
-    assert openviking["waitProcessedTimeoutS"] == 30.0
+    assert saved.memory.provider is None
+    assert saved.memory.local.history_file == "HISTORY.md"
+    assert raw_saved["memory"]["providers"] == {}
+    assert "backend" not in raw_saved["memory"]
+    assert "backends" not in raw_saved["memory"]
     assert "memory layers:" in stripped_output
     assert "prompt memory" in stripped_output
     assert "archive" in stripped_output
@@ -238,7 +223,7 @@ def test_onboard_uses_explicit_config_and_workspace_paths(tmp_path, monkeypatch)
     assert f"--config {resolved_config}" in compact_output
 
 
-def test_onboard_refresh_adds_openviking_template_without_changing_default(
+def test_onboard_refresh_migrates_legacy_memory_shape_without_backend_fields(
     tmp_path: Path, monkeypatch
 ) -> None:
     config_path = tmp_path / "config.json"
@@ -249,7 +234,7 @@ def test_onboard_refresh_adds_openviking_template_without_changing_default(
                 "memory": {
                     "backend": "file",
                     "backends": {
-                        "file": {},
+                        "file": {"memoryDir": "notes", "historyFilename": "ARCHIVE.md"},
                     },
                 }
             }
@@ -266,15 +251,14 @@ def test_onboard_refresh_adds_openviking_template_without_changing_default(
 
     assert result.exit_code == 0
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    openviking = saved["memory"]["backends"]["openviking"]
     stripped_output = _strip_ansi(result.stdout).lower()
 
-    assert saved["memory"]["backend"] == "file"
-    assert saved["memory"]["backends"]["file"] == {}
-    assert openviking["ovConfig"]["storage"] == {}
-    assert openviking["searchMode"] == "search"
-    assert openviking["recallTimeoutS"] == 20.0
-    assert openviking["waitProcessedTimeoutS"] == 30.0
+    assert saved["memory"]["prompt"]["directory"] == "notes"
+    assert saved["memory"]["local"]["historyFile"] == "ARCHIVE.md"
+    assert saved["memory"]["provider"] is None
+    assert saved["memory"]["providers"] == {}
+    assert "backend" not in saved["memory"]
+    assert "backends" not in saved["memory"]
     assert "aeloon memory setup openviking" in stripped_output
     assert (workspace_path / "memory" / "MEMORY.md").exists()
 
@@ -284,16 +268,15 @@ def test_onboard_refresh_preserves_existing_openviking_config(tmp_path: Path, mo
     workspace_path = tmp_path / "workspace"
     existing = {
         "memory": {
-            "backend": "file",
-            "backends": {
-                "file": {},
+            "provider": "openviking",
+            "providers": {
                 "openviking": {
                     "ovConfig": {"storage": {}},
                     "searchMode": "find",
                     "targetUri": "viking://custom/",
                     "recallTimeoutS": 9.5,
                     "waitProcessedTimeoutS": 14.0,
-                },
+                }
             },
         }
     }
@@ -308,14 +291,16 @@ def test_onboard_refresh_preserves_existing_openviking_config(tmp_path: Path, mo
 
     assert result.exit_code == 0
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    openviking = saved["memory"]["backends"]["openviking"]
+    openviking = saved["memory"]["providers"]["openviking"]
 
-    assert saved["memory"]["backend"] == "file"
+    assert saved["memory"]["provider"] == "openviking"
     assert openviking["searchMode"] == "find"
     assert openviking["targetUri"] == "viking://custom/"
     assert openviking["recallTimeoutS"] == 9.5
     assert openviking["waitProcessedTimeoutS"] == 14.0
     assert openviking["ovConfig"] == {"storage": {}}
+    assert "backend" not in saved["memory"]
+    assert "backends" not in saved["memory"]
 
 
 def test_config_matches_github_copilot_codex_with_hyphen_prefix():

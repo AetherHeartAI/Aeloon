@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
-from aeloon.core.config.schema import Config
-from aeloon.core.session.manager import Session
+from aeloon.core.config.schema import Config, PromptMemoryConfig
+from aeloon.core.session.manager import Session, SessionManager
+from aeloon.memory.prompt_store import PromptMemoryStore
+from aeloon.memory.types import MemoryRuntimeDeps, TurnMemoryContext
 from aeloon.providers.base import LLMProvider, LLMResponse
 
 
@@ -26,67 +29,138 @@ class DummyProvider(LLMProvider):
         return "test-model"
 
 
-def _make_deps(tmp_path: Path):
-    from aeloon.core.session.manager import SessionManager
-    from aeloon.memory.base import MemoryBackendDeps
-
-    return MemoryBackendDeps(
+def _make_deps(tmp_path: Path) -> MemoryRuntimeDeps:
+    return MemoryRuntimeDeps(
         workspace=tmp_path,
         provider=DummyProvider(),
         model="test-model",
         sessions=SessionManager(tmp_path),
         context_window_tokens=4096,
-        build_messages=lambda *args, **kwargs: [],
+        build_messages=lambda **_kwargs: [],
         get_tool_definitions=lambda: [],
     )
 
 
+class _DummyLocalMemory:
+    def __init__(self) -> None:
+        self.after_turn_calls: list[str | None] = []
+        self.new_session_calls: list[int] = []
+
+    async def prepare_turn(
+        self,
+        *,
+        session: object,
+        query: str,
+        channel: str | None,
+        chat_id: str | None,
+        current_role: str,
+    ) -> TurnMemoryContext:
+        return TurnMemoryContext(history_start_index=2, runtime_lines=["Memory mode: local"])
+
+    async def after_turn(
+        self,
+        *,
+        session: object,
+        raw_new_messages: list[dict[str, object]],
+        persisted_new_messages: list[dict[str, object]],
+        final_content: str | None,
+    ) -> None:
+        self.after_turn_calls.append(final_content)
+
+    def pending_start_index(self, session: object) -> int:
+        return 2
+
+    def estimate_session_prompt_tokens(self, session: Session) -> tuple[int, str]:
+        return (123, "mock")
+
+    async def on_new_session(
+        self,
+        *,
+        session: object,
+        pending_messages: list[dict[str, object]],
+    ) -> None:
+        self.new_session_calls.append(len(pending_messages))
+
+    async def maybe_compact_by_tokens(self, session: Session) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+
+class _DummyProviderManager:
+    def system_prompt_sections(self) -> list[str]:
+        return ["# Provider\n\nOpenViking enabled"]
+
+    def always_skill_names(self) -> list[str]:
+        return ["openviking-memory"]
+
+    async def prefetch(
+        self,
+        *,
+        session: object,
+        query: str,
+        channel: str | None,
+        chat_id: str | None,
+        current_role: str,
+    ) -> str:
+        return "Provider recall"
+
+    async def sync_turn(
+        self,
+        *,
+        session: object,
+        raw_new_messages: list[dict[str, object]],
+        persisted_new_messages: list[dict[str, object]],
+        final_content: str | None,
+    ) -> None:
+        return None
+
+    async def on_pre_compress(
+        self,
+        *,
+        session: object,
+        pending_messages: list[dict[str, object]],
+    ) -> None:
+        return None
+
+    async def on_memory_write(self, *, action: str, target: str, content: str) -> None:
+        return None
+
+    async def shutdown(self) -> None:
+        return None
+
+
 @pytest.mark.asyncio
-async def test_memory_runtime_builds_backend_and_exposes_component_slots(tmp_path: Path) -> None:
-    from aeloon.memory.base import MemoryBackend, MemoryBackendConfig, PreparedMemoryContext
-    from aeloon.memory.registry import register_backend
+async def test_memory_runtime_owns_local_memory_and_component_slots(tmp_path: Path) -> None:
     from aeloon.memory.runtime import MemoryRuntime
 
-    class FakeConfig(MemoryBackendConfig):
-        label: str = "fake"
+    runtime = MemoryRuntime(memory_config=Config().memory, deps=_make_deps(tmp_path))
 
-    @register_backend
-    class FakeBackend(MemoryBackend):
-        backend_name = "fake-runtime-build"
-        config_model = FakeConfig
-        config: FakeConfig
+    assert runtime.local_memory is not None
+    assert runtime.prompt_memory is not None
+    assert runtime.session_archive is not None
+    assert runtime.provider_manager is None
+    assert runtime.flush_coordinator is not None
+    assert not hasattr(runtime, "backend")
 
-        async def prepare_turn(
-            self,
-            *,
-            session: object,
-            query: str,
-            channel: str | None,
-            chat_id: str | None,
-            current_role: str,
-        ) -> PreparedMemoryContext:
-            return PreparedMemoryContext(runtime_lines=[self.config.label])
 
-        async def after_turn(
-            self,
-            *,
-            session: object,
-            raw_new_messages: list[dict[str, object]],
-            persisted_new_messages: list[dict[str, object]],
-            final_content: str | None,
-        ) -> None:
-            return None
+@pytest.mark.asyncio
+async def test_memory_runtime_prepare_turn_injects_prompt_memory_and_provider_recall(
+    tmp_path: Path,
+) -> None:
+    from aeloon.memory.runtime import MemoryRuntime
 
-    cfg = Config.model_validate(
-        {
-            "memory": {
-                "provider": "fake-runtime-build",
-                "providers": {"fake-runtime-build": {"label": "wired"}},
-            }
-        }
+    prompt_memory = PromptMemoryStore(tmp_path, PromptMemoryConfig())
+    prompt_memory.add("memory", "Workspace uses concise progress updates.")
+    runtime = MemoryRuntime(
+        memory_config=Config().memory,
+        deps=_make_deps(tmp_path),
+        local_memory=_DummyLocalMemory(),
+        prompt_memory=prompt_memory,
+        provider_manager=_DummyProviderManager(),
     )
 
-    runtime = MemoryRuntime(memory_config=cfg.memory, deps=_make_deps(tmp_path))
     prepared = await runtime.prepare_turn(
         session=Session(key="cli:test"),
         query="hello",
@@ -95,42 +169,16 @@ async def test_memory_runtime_builds_backend_and_exposes_component_slots(tmp_pat
         current_role="user",
     )
 
-    assert prepared.runtime_lines == ["wired"]
-    assert runtime.prompt_memory is not None
-    assert runtime.session_archive is not None
-    assert runtime.provider_manager is None
-    assert runtime.flush_coordinator is not None
+    assert prepared.history_start_index == 2
+    assert "memory" in prepared.always_skill_names
+    assert "openviking-memory" in prepared.always_skill_names
+    assert any("Workspace uses concise progress updates." in section for section in prepared.system_sections)
+    assert any("Provider recall" in block for block in prepared.recalled_context_blocks)
 
 
 @pytest.mark.asyncio
 async def test_memory_runtime_flush_delegates_to_flush_coordinator(tmp_path: Path) -> None:
-    from aeloon.memory.base import MemoryBackend, MemoryBackendConfig, PreparedMemoryContext
     from aeloon.memory.runtime import MemoryRuntime
-
-    class FakeBackend(MemoryBackend):
-        backend_name = "fake-runtime-flush"
-        config_model = MemoryBackendConfig
-
-        async def prepare_turn(
-            self,
-            *,
-            session: object,
-            query: str,
-            channel: str | None,
-            chat_id: str | None,
-            current_role: str,
-        ) -> PreparedMemoryContext:
-            return PreparedMemoryContext()
-
-        async def after_turn(
-            self,
-            *,
-            session: object,
-            raw_new_messages: list[dict[str, object]],
-            persisted_new_messages: list[dict[str, object]],
-            final_content: str | None,
-        ) -> None:
-            return None
 
     class DummyFlushCoordinator:
         def __init__(self) -> None:
@@ -148,9 +196,12 @@ async def test_memory_runtime_flush_delegates_to_flush_coordinator(tmp_path: Pat
         async def close(self) -> None:
             return None
 
-    runtime = MemoryRuntime.from_backend(
-        FakeBackend(MemoryBackendConfig(), _make_deps(tmp_path)),
-        flush_coordinator=DummyFlushCoordinator(),
+    flush = DummyFlushCoordinator()
+    runtime = MemoryRuntime(
+        memory_config=Config().memory,
+        deps=_make_deps(tmp_path),
+        local_memory=_DummyLocalMemory(),
+        flush_coordinator=flush,
     )
 
     await runtime.flush(
@@ -159,44 +210,14 @@ async def test_memory_runtime_flush_delegates_to_flush_coordinator(tmp_path: Pat
         reason="new-session",
     )
 
-    assert runtime.flush_coordinator is not None
-    assert runtime.flush_coordinator.calls == [(1, "new-session")]
+    assert flush.calls == [(1, "new-session")]
 
 
 @pytest.mark.asyncio
 async def test_memory_runtime_on_shutdown_flushes_then_closes_components(tmp_path: Path) -> None:
-    from aeloon.memory.base import MemoryBackend, MemoryBackendConfig, PreparedMemoryContext
     from aeloon.memory.runtime import MemoryRuntime
 
     events: list[str] = []
-
-    class FakeBackend(MemoryBackend):
-        backend_name = "fake-runtime-shutdown"
-        config_model = MemoryBackendConfig
-
-        async def prepare_turn(
-            self,
-            *,
-            session: object,
-            query: str,
-            channel: str | None,
-            chat_id: str | None,
-            current_role: str,
-        ) -> PreparedMemoryContext:
-            return PreparedMemoryContext()
-
-        async def after_turn(
-            self,
-            *,
-            session: object,
-            raw_new_messages: list[dict[str, object]],
-            persisted_new_messages: list[dict[str, object]],
-            final_content: str | None,
-        ) -> None:
-            return None
-
-        async def close(self) -> None:
-            events.append("backend-close")
 
     class DummyFlushCoordinator:
         async def flush(
@@ -211,15 +232,18 @@ async def test_memory_runtime_on_shutdown_flushes_then_closes_components(tmp_pat
         async def close(self) -> None:
             events.append("flush-close")
 
-    class DummyProviderManager:
-        async def on_pre_compress(self, *, session: object, pending_messages) -> None:
-            return None
-
+    class DummyProviderManager(_DummyProviderManager):
         async def shutdown(self) -> None:
             events.append("provider-shutdown")
 
-    runtime = MemoryRuntime.from_backend(
-        FakeBackend(MemoryBackendConfig(), _make_deps(tmp_path)),
+    class DummyLocalMemory(_DummyLocalMemory):
+        async def close(self) -> None:
+            events.append("local-close")
+
+    runtime = MemoryRuntime(
+        memory_config=Config().memory,
+        deps=_make_deps(tmp_path),
+        local_memory=DummyLocalMemory(),
         provider_manager=DummyProviderManager(),
         flush_coordinator=DummyFlushCoordinator(),
     )
@@ -234,13 +258,11 @@ async def test_memory_runtime_on_shutdown_flushes_then_closes_components(tmp_pat
         "flush:shutdown",
         "provider-shutdown",
         "flush-close",
-        "backend-close",
+        "local-close",
     ]
 
 
-def test_agent_loop_uses_memory_runtime(tmp_path: Path) -> None:
-    from unittest.mock import MagicMock
-
+def test_agent_loop_uses_memory_runtime_with_local_memory(tmp_path: Path) -> None:
     from aeloon.core.agent.loop import AgentLoop
     from aeloon.core.bus.queue import MessageBus
     from aeloon.memory.runtime import MemoryRuntime
@@ -251,4 +273,21 @@ def test_agent_loop_uses_memory_runtime(tmp_path: Path) -> None:
     loop = AgentLoop(bus=MessageBus(), provider=provider, workspace=tmp_path, model="test-model")
 
     assert isinstance(loop.memory, MemoryRuntime)
-    assert loop.memory_consolidator is loop.memory.backend
+    assert loop.memory.local_memory is not None
+    assert not hasattr(loop, "memory_" "consolidator")
+
+
+def test_memory_public_api_exports_backendless_symbols() -> None:
+    from aeloon.memory import (
+        LocalMemoryRuntime,
+        LocalMemoryStore,
+        MemoryRuntime,
+        MemoryRuntimeDeps,
+        TurnMemoryContext,
+    )
+
+    assert LocalMemoryRuntime is not None
+    assert LocalMemoryStore is not None
+    assert MemoryRuntime is not None
+    assert MemoryRuntimeDeps is not None
+    assert TurnMemoryContext is not None

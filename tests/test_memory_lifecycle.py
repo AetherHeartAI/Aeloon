@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 
-from aeloon.core.session.manager import Session
+from aeloon.core.config.schema import Config
+from aeloon.core.session.manager import Session, SessionManager
+from aeloon.memory.types import MemoryRuntimeDeps, TurnMemoryContext
 from aeloon.providers.base import LLMProvider, LLMResponse
 
 
@@ -25,34 +28,27 @@ class DummyProvider(LLMProvider):
         return "test-model"
 
 
-def _make_deps(tmp_path):
-    from aeloon.core.session.manager import SessionManager
-    from aeloon.memory.base import MemoryBackendDeps
-
-    return MemoryBackendDeps(
+def _make_deps(tmp_path: Path) -> MemoryRuntimeDeps:
+    return MemoryRuntimeDeps(
         workspace=tmp_path,
         provider=DummyProvider(),
         model="test-model",
         sessions=SessionManager(tmp_path),
         context_window_tokens=4096,
-        build_messages=lambda *args, **kwargs: [],
+        build_messages=lambda **_kwargs: [],
         get_tool_definitions=lambda: [],
     )
 
 
 @pytest.mark.asyncio
-async def test_memory_manager_drains_background_tasks_on_close(tmp_path) -> None:
-    from aeloon.memory.base import MemoryBackend, MemoryBackendConfig, PreparedMemoryContext
-    from aeloon.memory.manager import MemoryManager
+async def test_memory_runtime_drains_background_tasks_on_close(tmp_path: Path) -> None:
+    from aeloon.memory.runtime import MemoryRuntime
 
     started = asyncio.Event()
     finished = asyncio.Event()
     events: list[str] = []
 
-    class FakeBackend(MemoryBackend):
-        backend_name = "fake-close"
-        config_model = MemoryBackendConfig
-
+    class DummyLocalMemory:
         async def prepare_turn(
             self,
             *,
@@ -61,8 +57,8 @@ async def test_memory_manager_drains_background_tasks_on_close(tmp_path) -> None
             channel: str | None,
             chat_id: str | None,
             current_role: str,
-        ) -> PreparedMemoryContext:
-            return PreparedMemoryContext()
+        ) -> TurnMemoryContext:
+            return TurnMemoryContext()
 
         async def after_turn(
             self,
@@ -78,36 +74,54 @@ async def test_memory_manager_drains_background_tasks_on_close(tmp_path) -> None
             events.append("after_turn:end")
             finished.set()
 
+        def pending_start_index(self, session: object) -> int:
+            return 0
+
+        def estimate_session_prompt_tokens(self, session: Session) -> tuple[int, str]:
+            return (0, "none")
+
+        async def on_new_session(
+            self,
+            *,
+            session: object,
+            pending_messages: list[dict[str, object]],
+        ) -> None:
+            return None
+
+        async def maybe_compact_by_tokens(self, session: Session) -> None:
+            return None
+
         async def close(self) -> None:
             assert finished.is_set()
             events.append("close")
 
-    backend = FakeBackend(MemoryBackendConfig(), _make_deps(tmp_path))
-    manager = MemoryManager.from_backend(backend)
+    runtime = MemoryRuntime(
+        memory_config=Config().memory,
+        deps=_make_deps(tmp_path),
+        local_memory=DummyLocalMemory(),
+        session_archive=None,
+        flush_coordinator=None,
+    )
 
-    await manager.after_turn(
+    await runtime.after_turn(
         session=Session(key="cli:test"),
         raw_new_messages=[],
         persisted_new_messages=[],
         final_content="ok",
     )
     await started.wait()
-    await manager.close()
+    await runtime.close()
 
     assert events == ["after_turn:start", "after_turn:end", "close"]
 
 
 @pytest.mark.asyncio
-async def test_memory_manager_schedules_new_session_hook(tmp_path) -> None:
-    from aeloon.memory.base import MemoryBackend, MemoryBackendConfig, PreparedMemoryContext
-    from aeloon.memory.manager import MemoryManager
+async def test_memory_runtime_schedules_new_session_hook(tmp_path: Path) -> None:
+    from aeloon.memory.runtime import MemoryRuntime
 
     archived = asyncio.Event()
 
-    class FakeBackend(MemoryBackend):
-        backend_name = "fake-new-session"
-        config_model = MemoryBackendConfig
-
+    class DummyLocalMemory:
         async def prepare_turn(
             self,
             *,
@@ -116,8 +130,8 @@ async def test_memory_manager_schedules_new_session_hook(tmp_path) -> None:
             channel: str | None,
             chat_id: str | None,
             current_role: str,
-        ) -> PreparedMemoryContext:
-            return PreparedMemoryContext()
+        ) -> TurnMemoryContext:
+            return TurnMemoryContext()
 
         async def after_turn(
             self,
@@ -128,6 +142,12 @@ async def test_memory_manager_schedules_new_session_hook(tmp_path) -> None:
             final_content: str | None,
         ) -> None:
             return None
+
+        def pending_start_index(self, session: object) -> int:
+            return 0
+
+        def estimate_session_prompt_tokens(self, session: Session) -> tuple[int, str]:
+            return (0, "none")
 
         async def on_new_session(
             self,
@@ -138,29 +158,36 @@ async def test_memory_manager_schedules_new_session_hook(tmp_path) -> None:
             assert len(pending_messages) == 2
             archived.set()
 
-    backend = FakeBackend(MemoryBackendConfig(), _make_deps(tmp_path))
-    manager = MemoryManager.from_backend(backend)
+        async def maybe_compact_by_tokens(self, session: Session) -> None:
+            return None
 
-    await manager.on_new_session(
+        async def close(self) -> None:
+            return None
+
+    runtime = MemoryRuntime(
+        memory_config=Config().memory,
+        deps=_make_deps(tmp_path),
+        local_memory=DummyLocalMemory(),
+        session_archive=None,
+        flush_coordinator=None,
+    )
+
+    await runtime.on_new_session(
         session=Session(key="cli:test"),
         pending_messages=[{"role": "user", "content": "u"}, {"role": "assistant", "content": "a"}],
     )
-    await manager.close()
+    await runtime.close()
 
     assert archived.is_set()
 
 
 @pytest.mark.asyncio
-async def test_memory_runtime_on_shutdown_flushes_before_close(tmp_path) -> None:
-    from aeloon.memory.base import MemoryBackend, MemoryBackendConfig, PreparedMemoryContext
+async def test_memory_runtime_on_shutdown_flushes_before_close(tmp_path: Path) -> None:
     from aeloon.memory.runtime import MemoryRuntime
 
     events: list[str] = []
 
-    class FakeBackend(MemoryBackend):
-        backend_name = "fake-shutdown-flush"
-        config_model = MemoryBackendConfig
-
+    class DummyLocalMemory:
         async def prepare_turn(
             self,
             *,
@@ -169,8 +196,8 @@ async def test_memory_runtime_on_shutdown_flushes_before_close(tmp_path) -> None
             channel: str | None,
             chat_id: str | None,
             current_role: str,
-        ) -> PreparedMemoryContext:
-            return PreparedMemoryContext()
+        ) -> TurnMemoryContext:
+            return TurnMemoryContext()
 
         async def after_turn(
             self,
@@ -182,8 +209,25 @@ async def test_memory_runtime_on_shutdown_flushes_before_close(tmp_path) -> None
         ) -> None:
             return None
 
+        def pending_start_index(self, session: object) -> int:
+            return 0
+
+        def estimate_session_prompt_tokens(self, session: Session) -> tuple[int, str]:
+            return (0, "none")
+
+        async def on_new_session(
+            self,
+            *,
+            session: object,
+            pending_messages: list[dict[str, object]],
+        ) -> None:
+            return None
+
+        async def maybe_compact_by_tokens(self, session: Session) -> None:
+            return None
+
         async def close(self) -> None:
-            events.append("backend-close")
+            events.append("local-close")
 
     class Flush:
         async def flush(
@@ -194,8 +238,11 @@ async def test_memory_runtime_on_shutdown_flushes_before_close(tmp_path) -> None
         async def close(self) -> None:
             events.append("flush-close")
 
-    runtime = MemoryRuntime.from_backend(
-        FakeBackend(MemoryBackendConfig(), _make_deps(tmp_path)),
+    runtime = MemoryRuntime(
+        memory_config=Config().memory,
+        deps=_make_deps(tmp_path),
+        local_memory=DummyLocalMemory(),
+        session_archive=None,
         flush_coordinator=Flush(),
     )
 
@@ -205,4 +252,4 @@ async def test_memory_runtime_on_shutdown_flushes_before_close(tmp_path) -> None
         reason="gateway-shutdown",
     )
 
-    assert events == ["flush:gateway-shutdown", "flush-close", "backend-close"]
+    assert events == ["flush:gateway-shutdown", "flush-close", "local-close"]
