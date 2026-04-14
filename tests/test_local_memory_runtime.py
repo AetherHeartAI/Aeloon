@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from aeloon.core.agent.output_manager import OutputManager
 from aeloon.core.config.schema import LocalMemoryConfig, PromptMemoryConfig
 from aeloon.core.session.manager import Session, SessionManager
 from aeloon.memory.types import MemoryRuntimeDeps
@@ -130,4 +131,73 @@ async def test_local_memory_runtime_prepare_turn_reports_local_memory(tmp_path: 
 
     assert prepared.runtime_lines[0] == "Memory mode: local archive"
     assert prepared.runtime_lines[1] == "Prompt memory owned by PromptMemoryStore"
+    assert all("HISTORY.md" not in line for line in prepared.runtime_lines)
     assert prepared.history_start_index == 0
+
+
+@pytest.mark.asyncio
+async def test_local_memory_runtime_archive_messages_is_retired_noop(tmp_path: Path) -> None:
+    from aeloon.memory.local_runtime import LocalMemoryRuntime
+
+    runtime = LocalMemoryRuntime(
+        config=LocalMemoryConfig(),
+        prompt_config=PromptMemoryConfig(),
+        deps=_make_deps(tmp_path, estimated_tokens=10, context_window_tokens=200),
+    )
+    runtime.consolidate_messages = AsyncMock(return_value=False)  # type: ignore[method-assign]
+
+    result = await runtime.archive_messages([{"role": "user", "content": "hello"}])
+
+    assert result is True
+    runtime.consolidate_messages.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_local_memory_runtime_passes_output_summary_to_consolidation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aeloon.memory import local_runtime as local_runtime_module
+    from aeloon.memory.local_runtime import LocalMemoryRuntime
+
+    runtime = LocalMemoryRuntime(
+        config=LocalMemoryConfig(triggerRatio=0.0, targetRatio=0.0, maxConsolidationRounds=1),
+        prompt_config=PromptMemoryConfig(),
+        deps=_make_deps(tmp_path, estimated_tokens=10, context_window_tokens=1),
+    )
+
+    class _TestOutputManager(OutputManager):
+        def build_output_summary(
+            self,
+            session: Session | None = None,
+            limit: int = 20,
+        ) -> str:
+            assert limit == 20
+            assert session is not None
+            return '- outputs/research/report.md — "Report"'
+
+    captured: list[str] = []
+
+    async def fake_consolidate_messages(
+        messages: list[dict[str, object]],
+        output_summary: str = "",
+    ) -> bool:
+        assert messages
+        captured.append(output_summary)
+        return True
+
+    setattr(runtime, "consolidate_messages", fake_consolidate_messages)
+    runtime.set_output_manager(_TestOutputManager(tmp_path))
+
+    session = Session(key="cli:test")
+    session.messages = [
+        {"role": "user", "content": "one"},
+        {"role": "assistant", "content": "two"},
+        {"role": "user", "content": "three"},
+    ]
+
+    monkeypatch.setattr(local_runtime_module, "estimate_message_tokens", lambda _message: 1)
+
+    await runtime.maybe_compact_by_tokens(session)
+
+    assert captured == ['- outputs/research/report.md — "Report"']

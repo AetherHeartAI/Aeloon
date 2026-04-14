@@ -1,6 +1,5 @@
 """Test session management with cache-friendly message handling."""
 
-import asyncio
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -537,7 +536,7 @@ class TestNewCommandArchival:
     async def test_new_clears_session_immediately_even_if_archive_fails(
         self, tmp_path: Path
     ) -> None:
-        """/new clears session immediately; archive_messages retries until raw dump."""
+        """/new clears session immediately even though local archive is retired."""
         from aeloon.core.bus.events import InboundMessage
 
         loop = self._make_loop(tmp_path)
@@ -566,10 +565,12 @@ class TestNewCommandArchival:
         assert len(session_after.messages) == 0
 
         await loop.close_mcp()
-        assert call_count == 3  # retried up to raw-archive threshold
+        assert call_count == 0
 
     @pytest.mark.asyncio
-    async def test_new_archives_only_unconsolidated_messages(self, tmp_path: Path) -> None:
+    async def test_new_does_not_call_local_archive_for_unconsolidated_messages(
+        self, tmp_path: Path
+    ) -> None:
         from aeloon.core.bus.events import InboundMessage
 
         loop = self._make_loop(tmp_path)
@@ -596,7 +597,7 @@ class TestNewCommandArchival:
         assert "new session started" in response.content.lower()
 
         await loop.close_mcp()
-        assert archived_count == 3
+        assert archived_count == -1
 
     @pytest.mark.asyncio
     async def test_new_clears_session_and_responds(self, tmp_path: Path) -> None:

@@ -63,12 +63,14 @@ class FakeFindResult:
 class FakeOpenVikingSession:
     session_id: str
     existing_session_ids: set[str]
+    broken_session_ids: set[str]
     messages: list[tuple[str, str | None]] = field(default_factory=list)
     parts_history: list[list[dict[str, object]] | None] = field(default_factory=list)
     commit_calls: int = 0
 
     async def ensure_exists(self) -> None:
         self.existing_session_ids.add(self.session_id)
+        self.broken_session_ids.discard(self.session_id)
 
     async def add_message(
         self,
@@ -116,6 +118,7 @@ class FakeOpenVikingClient:
     delete_session_calls: list[str] = field(default_factory=list)
     sessions: dict[str, FakeOpenVikingSession] = field(default_factory=dict)
     existing_session_ids: set[str] = field(default_factory=set)
+    broken_session_ids: set[str] = field(default_factory=set)
 
     async def initialize(self) -> None:
         self.initialized = True
@@ -136,6 +139,7 @@ class FakeOpenVikingClient:
             session = FakeOpenVikingSession(
                 session_id=resolved,
                 existing_session_ids=self.existing_session_ids,
+                broken_session_ids=self.broken_session_ids,
             )
             self.sessions[resolved] = session
         return session
@@ -150,6 +154,10 @@ class FakeOpenVikingClient:
         content: str | None = None,
         parts: list[dict[str, object]] | None = None,
     ) -> dict[str, object]:
+        if session_id in self.broken_session_ids:
+            raise OSError(
+                f"Failed to append to file viking://session/default/{session_id}/messages.jsonl: not found"
+            )
         self.existing_session_ids.add(session_id)
         return await self.session(session_id).add_message(role=role, content=content, parts=parts)
 
@@ -161,6 +169,7 @@ class FakeOpenVikingClient:
         self.delete_session_calls.append(session_id)
         self.sessions.pop(session_id, None)
         self.existing_session_ids.discard(session_id)
+        self.broken_session_ids.discard(session_id)
 
     async def search(
         self,
@@ -227,6 +236,11 @@ class FakeOpenVikingClient:
 
     async def stat(self, uri: str) -> dict[str, object]:
         self.stat_calls.append(uri)
+        session_id = _session_id_from_uri(uri)
+        if session_id not in self.existing_session_ids:
+            raise OSError(f"not found: {uri}")
+        if uri.endswith("/messages.jsonl") and session_id in self.broken_session_ids:
+            raise OSError(f"not found: {uri}")
         return self.stat_result
 
     async def add_resource(
@@ -257,6 +271,7 @@ class FakeOpenVikingFactory:
     default_add_resource_result: dict[str, object] = field(default_factory=dict)
     shared_sessions: dict[str, FakeOpenVikingSession] = field(default_factory=dict)
     shared_existing_session_ids: set[str] = field(default_factory=set)
+    shared_broken_session_ids: set[str] = field(default_factory=set)
 
     def __call__(self, path: str | None = None) -> FakeOpenVikingClient:
         client = FakeOpenVikingClient(
@@ -272,6 +287,7 @@ class FakeOpenVikingFactory:
             add_resource_result=self.default_add_resource_result,
             sessions=self.shared_sessions,
             existing_session_ids=self.shared_existing_session_ids,
+            broken_session_ids=self.shared_broken_session_ids,
         )
         self.clients.append(client)
         return client
@@ -313,6 +329,13 @@ def _install_fake_runtime(monkeypatch: pytest.MonkeyPatch):
     )
     monkeypatch.setattr(service_module, "_load_openviking_runtime", lambda: runtime)
     return factory, config_singleton
+
+
+def _session_id_from_uri(uri: str) -> str:
+    parts = uri.rstrip("/").split("/")
+    if uri.endswith("/messages.jsonl"):
+        return parts[-2]
+    return parts[-1]
 
 
 def test_openviking_provider_config_rejects_non_leaf_storage_subdir() -> None:
@@ -434,7 +457,8 @@ async def test_openviking_provider_sync_turn_mirrors_messages_to_live_session(
     )
 
     client = factory.clients[0]
-    live_session = client.sessions["aeloon-live-cli_test"]
+    live_session_id = provider.service._read_state(session)["liveSessionId"]
+    live_session = client.sessions[live_session_id]
     assert live_session.messages == [("user", "hello"), ("assistant", "world")]
 
 
@@ -460,9 +484,10 @@ async def test_openviking_provider_on_pre_compress_archives_pending_messages(
     )
 
     client = factory.clients[0]
-    assert client.commit_session_calls
+    assert len(client.commit_session_calls) == 1
+    assert client.commit_session_calls[0].startswith("aeloon-archive-cli_test-")
     assert client.wait_processed_calls == [18.0]
-    assert client.delete_session_calls == ["aeloon-live-cli_test"]
+    assert client.delete_session_calls == []
 
 
 def test_openviking_provider_exposes_tool_surface(
@@ -504,7 +529,11 @@ async def test_openviking_provider_on_memory_write_mirrors_prompt_memory_notes(
     )
 
     client = factory.clients[0]
-    live_session = client.sessions["aeloon-live-cli_test"]
+    live_session = client.sessions[
+        provider.service._read_state(provider.service.sessions.get_or_create("cli:test"))[
+            "liveSessionId"
+        ]
+    ]
     assert live_session.messages == [("user", None)]
     assert live_session.parts_history[0] == [
         {
@@ -515,7 +544,7 @@ async def test_openviking_provider_on_memory_write_mirrors_prompt_memory_notes(
 
 
 @pytest.mark.asyncio
-async def test_openviking_provider_on_session_end_commits_live_session(
+async def test_openviking_provider_on_session_end_commits_archive_session(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -548,9 +577,10 @@ async def test_openviking_provider_on_session_end_commits_live_session(
     )
 
     client = factory.clients[0]
-    assert client.commit_session_calls == ["aeloon-live-cli_test"]
+    assert len(client.commit_session_calls) == 1
+    assert client.commit_session_calls[0].startswith("aeloon-archive-cli_test-")
     assert client.wait_processed_calls == [12.0]
-    assert client.delete_session_calls == ["aeloon-live-cli_test"]
+    assert client.delete_session_calls == []
 
 
 @pytest.mark.asyncio

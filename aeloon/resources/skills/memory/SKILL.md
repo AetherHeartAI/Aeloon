@@ -10,7 +10,7 @@ always: false
 
 - `memory/MEMORY.md` — Prompt memory for stable project and environment facts.
 - `memory/USER.md` — Prompt memory for stable user preferences and long-lived personalization data.
-- `memory/HISTORY.md` — Archive log for timeline/history summaries. Not prompt memory.
+- `memory/HISTORY.md` — Retired compatibility path. Runtime does not initialize or update it.
 
 ## Snapshot Semantics
 
@@ -37,7 +37,7 @@ Do not store:
 
 ## Transcript Recall
 
-Use transcript-recall tooling for past conversations when available. `session_search` is the primary cross-session recall interface. `HISTORY.md` remains a compatibility/debug artifact, not the preferred long-term recall interface.
+Use transcript-recall tooling for past conversations when available. `session_search` is the primary cross-session recall interface. `HISTORY.md` is retired from runtime behavior and should only matter for legacy/manual inspection.
 
 ## Prompt-Memory Scope
 

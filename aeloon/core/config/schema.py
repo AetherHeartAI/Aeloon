@@ -150,7 +150,11 @@ class PromptMemoryConfig(Base):
 class LocalMemoryConfig(Base):
     """Fixed local-memory compaction settings."""
 
-    history_file: str = Field(default="HISTORY.md", alias="historyFile")
+    history_file: str = Field(
+        default="HISTORY.md",
+        alias="historyFile",
+        description="Compatibility-only setting retained for config migration; runtime ignores it.",
+    )
     max_failures_before_raw_archive: int = Field(
         default=3,
         alias="maxFailuresBeforeRawArchive",

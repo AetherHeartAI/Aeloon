@@ -9,6 +9,10 @@ from aeloon.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 
 class _ArchiveOnlyProvider(LLMProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
     async def chat(
         self,
         messages: list[dict[str, object]],
@@ -19,6 +23,7 @@ class _ArchiveOnlyProvider(LLMProvider):
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, object] | None = None,
     ) -> LLMResponse:
+        self.calls += 1
         return LLMResponse(
             content=None,
             tool_calls=[
@@ -38,6 +43,7 @@ class _ArchiveOnlyProvider(LLMProvider):
 
 @pytest.mark.asyncio
 async def test_local_consolidation_only_appends_history(tmp_path: Path) -> None:
+    provider = _ArchiveOnlyProvider()
     store = LocalMemoryStore(
         directory=tmp_path / "memory",
         history_file_name="HISTORY.md",
@@ -49,10 +55,11 @@ async def test_local_consolidation_only_appends_history(tmp_path: Path) -> None:
 
     success = await store.consolidate(
         [{"role": "user", "content": "remember this"}],
-        _ArchiveOnlyProvider(),
+        provider,
         "test-model",
     )
 
     assert success is True
+    assert provider.calls == 0
     assert memory_file.read_text(encoding="utf-8") == "Existing prompt memory\n"
-    assert "summary entry" in (tmp_path / "memory" / "HISTORY.md").read_text(encoding="utf-8")
+    assert not (tmp_path / "memory" / "HISTORY.md").exists()

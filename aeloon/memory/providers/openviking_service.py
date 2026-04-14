@@ -9,7 +9,7 @@ import importlib.util
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from hashlib import sha1
+from datetime import datetime
 from pathlib import Path
 from typing import Protocol, TypedDict, cast
 
@@ -307,10 +307,31 @@ class EmbeddedOpenVikingTransport:
             await self.runtime.async_openviking_cls.reset()
             self.runtime = None
 
+    @staticmethod
+    def _session_uri(session_id: str) -> str:
+        return f"viking://session/default/{session_id}"
+
+    @classmethod
+    def _session_messages_uri(cls, session_id: str) -> str:
+        return f"{cls._session_uri(session_id)}/messages.jsonl"
+
+    async def _is_session_writable(
+        self,
+        client: OpenVikingClientProtocol,
+        session_id: str,
+    ) -> bool:
+        try:
+            await client.stat(self._session_messages_uri(session_id))
+        except Exception:
+            return False
+        return True
+
     async def ensure_session(self, session_id: str) -> None:
         client = await self._ensure_client()
         if await client.session_exists(session_id):
-            return
+            if await self._is_session_writable(client, session_id):
+                return
+            await client.delete_session(session_id)
         session = client.session(session_id=session_id)
         await session.ensure_exists()
 
@@ -667,9 +688,11 @@ class OpenVikingProviderConfig(BaseModel):
 
 class OpenVikingState(TypedDict):
     liveSessionId: str
+    liveGeneration: int
     mirroredCount: int
     archivedThrough: int
     archiveRound: int
+    staleSessionIds: list[str]
 
 
 class OpenVikingRecallBuckets(TypedDict):
@@ -714,19 +737,47 @@ class OpenVikingService:
             self._transport = transport
             return transport
 
-    def _live_session_id(self, session_key: str) -> str:
-        return f"aeloon-live-{session_key.replace(':', '_')}"
+    @staticmethod
+    def _slug_token(value: str) -> str:
+        cleaned = "".join(
+            ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in value.strip()
+        ).strip("_")
+        return cleaned or "session"
 
-    def _archive_session_id(self, session_key: str, messages: list[MessagePayload]) -> str:
-        digest = sha1(self._archive_digest_input(messages).encode("utf-8")).hexdigest()[:12]
-        return f"aeloon-archive-{session_key.replace(':', '_')}-{digest}"
+    def _session_key_token(self, session: object) -> str:
+        session_key = self._session_key(session) or "session"
+        return self._slug_token(session_key)
 
-    def _default_state(self, session_key: str) -> OpenVikingState:
+    def _session_instance_token(self, session: object) -> str:
+        archive_session_id = getattr(session, "archive_session_id", None)
+        if isinstance(archive_session_id, str) and archive_session_id:
+            return self._slug_token(archive_session_id.removeprefix("session-"))[:12]
+        created_at = getattr(session, "created_at", None)
+        if isinstance(created_at, datetime):
+            return created_at.strftime("%Y%m%d%H%M")
+        session_key = self._session_key(session) or "session"
+        return self._slug_token(session_key)[:12]
+
+    def _live_session_id(self, session: object, live_generation: int = 0) -> str:
+        return (
+            f"aeloon-live-{self._session_key_token(session)}-"
+            f"{self._session_instance_token(session)}-g{live_generation:03d}"
+        )
+
+    def _archive_session_id(self, session: object, archive_round: int) -> str:
+        return (
+            f"aeloon-archive-{self._session_key_token(session)}-"
+            f"{self._session_instance_token(session)}-r{archive_round:03d}"
+        )
+
+    def _default_state(self, session: object) -> OpenVikingState:
         return {
-            "liveSessionId": self._live_session_id(session_key),
+            "liveSessionId": self._live_session_id(session),
+            "liveGeneration": 0,
             "mirroredCount": 0,
             "archivedThrough": 0,
             "archiveRound": 0,
+            "staleSessionIds": [],
         }
 
     def _read_state(self, session: object) -> OpenVikingState:
@@ -734,11 +785,13 @@ class OpenVikingService:
         if session_key is None:
             return {
                 "liveSessionId": "",
+                "liveGeneration": 0,
                 "mirroredCount": 0,
                 "archivedThrough": 0,
                 "archiveRound": 0,
+                "staleSessionIds": [],
             }
-        state = self._default_state(session_key)
+        state = self._default_state(session)
         memory_state = getattr(session, "memory_state", None)
         raw_state = memory_state.get("openviking") if isinstance(memory_state, dict) else None
         if not isinstance(raw_state, Mapping):
@@ -747,6 +800,9 @@ class OpenVikingService:
         live_session_id = raw_state.get("liveSessionId")
         if isinstance(live_session_id, str) and live_session_id:
             state["liveSessionId"] = live_session_id
+        live_generation = raw_state.get("liveGeneration")
+        if isinstance(live_generation, int) and live_generation >= 0:
+            state["liveGeneration"] = live_generation
         mirrored_count = raw_state.get("mirroredCount")
         if isinstance(mirrored_count, int) and mirrored_count >= 0:
             state["mirroredCount"] = mirrored_count
@@ -756,6 +812,11 @@ class OpenVikingService:
         archive_round = raw_state.get("archiveRound")
         if isinstance(archive_round, int) and archive_round >= 0:
             state["archiveRound"] = archive_round
+        stale_session_ids = raw_state.get("staleSessionIds")
+        if isinstance(stale_session_ids, list):
+            state["staleSessionIds"] = [
+                item for item in stale_session_ids if isinstance(item, str) and item
+            ]
         return state
 
     def _persist_state(self, session: object, state: OpenVikingState) -> None:
@@ -773,6 +834,11 @@ class OpenVikingService:
         if state["mirroredCount"] <= state["archivedThrough"]:
             return None
         return state["liveSessionId"]
+
+    @staticmethod
+    def _remember_stale_session_id(state: OpenVikingState, session_id: str) -> None:
+        if session_id and session_id not in state["staleSessionIds"]:
+            state["staleSessionIds"].append(session_id)
 
     async def _ensure_session_exists(
         self,
@@ -982,15 +1048,6 @@ class OpenVikingService:
         content = self._message_content(message.get("content"))
         return role, content
 
-    def _archive_digest_input(self, messages: list[MessagePayload]) -> str:
-        parts: list[str] = []
-        for message in messages:
-            transcript = self._transcript_message(message)
-            if transcript is None:
-                continue
-            parts.append(f"{transcript[0]}:{transcript[1]}")
-        return "\n".join(parts)
-
     async def _replace_session_messages(
         self,
         transport: OpenVikingTransportProtocol,
@@ -1009,6 +1066,60 @@ class OpenVikingService:
                 role=transcript[0],
                 content=transcript[1],
             )
+
+    async def _sync_live_session(
+        self,
+        *,
+        transport: OpenVikingTransportProtocol,
+        session: object,
+        state: OpenVikingState,
+        messages: list[MessagePayload],
+    ) -> None:
+        del session
+        if state["mirroredCount"] > len(messages):
+            return
+        live_session_id = state["liveSessionId"]
+        await self._ensure_session_exists(transport, live_session_id)
+        for message in messages[state["mirroredCount"] :]:
+            transcript = self._transcript_message(message)
+            if transcript is None:
+                continue
+            await transport.add_message(
+                session_id=live_session_id,
+                role=transcript[0],
+                content=transcript[1],
+            )
+        state["mirroredCount"] = len(messages)
+
+    async def _commit_archive_session(
+        self,
+        *,
+        transport: OpenVikingTransportProtocol,
+        archive_session_id: str,
+        messages: list[MessagePayload],
+    ) -> None:
+        await self._replace_session_messages(transport, archive_session_id, messages)
+        await transport.commit_session(archive_session_id)
+        await transport.wait_processed(timeout=self.config.wait_processed_timeout_s)
+
+    async def _rotate_live_session(
+        self,
+        *,
+        transport: OpenVikingTransportProtocol,
+        session: object,
+        state: OpenVikingState,
+        remaining_messages: list[MessagePayload],
+    ) -> None:
+        previous_live_session_id = state["liveSessionId"]
+        if previous_live_session_id:
+            self._remember_stale_session_id(state, previous_live_session_id)
+        state["liveGeneration"] += 1
+        state["liveSessionId"] = self._live_session_id(session, state["liveGeneration"])
+        await self._replace_session_messages(
+            transport,
+            state["liveSessionId"],
+            remaining_messages,
+        )
 
     def _format_tool_search_result(self, result: object) -> dict[str, object]:
         formatted: list[dict[str, object]] = []
@@ -1225,26 +1336,29 @@ class OpenVikingService:
             transport = await self._ensure_transport()
             messages = self._session_messages(session)
             state = self._read_state(session)
-            if messages is not None and state["mirroredCount"] <= len(messages):
-                live_session_id = state["liveSessionId"]
-                await self._ensure_session_exists(transport, live_session_id)
-                for message in messages[state["mirroredCount"] :]:
-                    transcript = self._transcript_message(message)
-                    if transcript is None:
-                        continue
-                    await transport.add_message(
-                        session_id=live_session_id,
-                        role=transcript[0],
-                        content=transcript[1],
-                    )
-                state["mirroredCount"] = len(messages)
-                self._persist_state(session, state)
-            live_session_id = state["liveSessionId"]
-            if not await transport.session_exists(live_session_id):
+            del pending_messages
+            if messages is None:
                 return
-            await transport.commit_session(live_session_id)
-            await transport.wait_processed(timeout=self.config.wait_processed_timeout_s)
-            await transport.delete_session(live_session_id)
+            await self._sync_live_session(
+                transport=transport,
+                session=session,
+                state=state,
+                messages=messages,
+            )
+            archive_messages = messages[state["archivedThrough"] :]
+            if archive_messages:
+                next_archive_round = state["archiveRound"] + 1
+                await self._commit_archive_session(
+                    transport=transport,
+                    archive_session_id=self._archive_session_id(session, next_archive_round),
+                    messages=archive_messages,
+                )
+                state["archiveRound"] = next_archive_round
+                state["archivedThrough"] = len(messages)
+            live_session_id = state["liveSessionId"]
+            if live_session_id and await transport.session_exists(live_session_id):
+                self._remember_stale_session_id(state, live_session_id)
+            self._persist_state(session, state)
 
     def _session_has_suffix(
         self,
@@ -1310,22 +1424,12 @@ class OpenVikingService:
                 return
 
             state = self._read_state(session)
-            if state["mirroredCount"] > len(messages):
-                return
-
-            live_session_id = state["liveSessionId"]
-            await self._ensure_session_exists(transport, live_session_id)
-            for message in messages[state["mirroredCount"] :]:
-                transcript = self._transcript_message(message)
-                if transcript is None:
-                    continue
-                await transport.add_message(
-                    session_id=live_session_id,
-                    role=transcript[0],
-                    content=transcript[1],
-                )
-
-            state["mirroredCount"] = len(messages)
+            await self._sync_live_session(
+                transport=transport,
+                session=session,
+                state=state,
+                messages=messages,
+            )
             self._persist_state(session, state)
 
     async def archive_pending_slice(
@@ -1341,14 +1445,37 @@ class OpenVikingService:
         lock = self._get_lock(session_key)
         async with lock:
             transport = await self._ensure_transport()
-            if pending_messages:
-                archive_session_id = self._archive_session_id(session_key, pending_messages)
-                await self._replace_session_messages(
-                    transport, archive_session_id, pending_messages
-                )
-                await transport.commit_session(archive_session_id)
-                await transport.wait_processed(timeout=self.config.wait_processed_timeout_s)
-            await transport.delete_session(self._live_session_id(session_key))
+            messages = self._session_messages(session)
+            if messages is None:
+                return
+            state = self._read_state(session)
+            await self._sync_live_session(
+                transport=transport,
+                session=session,
+                state=state,
+                messages=messages,
+            )
+            if not pending_messages:
+                self._persist_state(session, state)
+                return
+            next_archive_round = state["archiveRound"] + 1
+            await self._commit_archive_session(
+                transport=transport,
+                archive_session_id=self._archive_session_id(session, next_archive_round),
+                messages=pending_messages,
+            )
+            state["archiveRound"] = next_archive_round
+            state["archivedThrough"] = min(
+                len(messages),
+                state["archivedThrough"] + len(pending_messages),
+            )
+            await self._rotate_live_session(
+                transport=transport,
+                session=session,
+                state=state,
+                remaining_messages=messages[state["archivedThrough"] :],
+            )
+            self._persist_state(session, state)
 
     async def shutdown(self) -> None:
         if self._transport is not None:

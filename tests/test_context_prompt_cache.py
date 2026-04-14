@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 from aeloon.core.agent.context import ContextBuilder
-from aeloon.core.agent.output_manager import OutputManager
 from aeloon.core.config.schema import MemoryConfig
 from aeloon.core.session.manager import Session, SessionManager
 from aeloon.memory.runtime import MemoryRuntime
@@ -64,6 +63,16 @@ def test_non_file_template_sync_skips_markdown_memory_files(tmp_path) -> None:
 
     assert (workspace / "AGENTS.md").is_file()
     assert not (workspace / "memory" / "MEMORY.md").exists()
+    assert not (workspace / "memory" / "HISTORY.md").exists()
+
+
+def test_template_sync_with_file_memory_keeps_history_retired(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+
+    sync_workspace_templates(workspace)
+
+    assert (workspace / "memory" / "MEMORY.md").is_file()
+    assert (workspace / "memory" / "USER.md").is_file()
     assert not (workspace / "memory" / "HISTORY.md").exists()
 
 
@@ -229,17 +238,3 @@ def test_runtime_context_is_separate_untrusted_user_message(tmp_path) -> None:
     assert "Channel: cli" in user_content
     assert "Chat ID: direct" in user_content
     assert "Return exactly: OK" in user_content
-
-
-def test_system_prompt_includes_recent_outputs_when_manager_attached(tmp_path) -> None:
-    workspace = _make_workspace(tmp_path)
-    builder = ContextBuilder(workspace)
-    manager = OutputManager(workspace)
-    builder.set_output_manager(manager)
-    manager.save_output("body", title="Notebook", category="docs")
-
-    prompt = builder.build_system_prompt()
-
-    assert "# Recent Outputs" in prompt
-    assert "outputs/docs/" in prompt
-    assert "Notebook" in prompt

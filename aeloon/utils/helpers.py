@@ -202,7 +202,6 @@ def sync_workspace_templates(
     if include_file_memory:
         _write(tpl / "memory" / "MEMORY.md", workspace / "memory" / "MEMORY.md")
         _write(tpl / "memory" / "USER.md", workspace / "memory" / "USER.md")
-        _write(None, workspace / "memory" / "HISTORY.md")
     (workspace / "skills").mkdir(exist_ok=True)
     (workspace / "compiled_skills").mkdir(exist_ok=True)
     (workspace / "outputs").mkdir(exist_ok=True)

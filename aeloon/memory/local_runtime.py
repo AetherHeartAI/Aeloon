@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
@@ -11,6 +12,9 @@ from aeloon.core.session.manager import Session
 from aeloon.memory.local_store import LocalMemoryStore
 from aeloon.memory.types import MemoryRuntimeDeps, MessagePayload, TurnMemoryContext
 from aeloon.utils.helpers import estimate_message_tokens, estimate_prompt_tokens_chain
+
+if TYPE_CHECKING:
+    from aeloon.core.agent.output_manager import OutputManager
 
 
 class LocalMemoryRuntime:
@@ -34,6 +38,7 @@ class LocalMemoryRuntime:
         self._build_messages = deps.build_messages
         self._get_tool_definitions = deps.get_tool_definitions
         self._locks: dict[str, asyncio.Lock] = {}
+        self._output_manager: OutputManager | None = None
 
     @property
     def history_file(self):
@@ -41,6 +46,9 @@ class LocalMemoryRuntime:
 
     def get_lock(self, session_key: str) -> asyncio.Lock:
         return self._locks.setdefault(session_key, asyncio.Lock())
+
+    def set_output_manager(self, manager: OutputManager) -> None:
+        self._output_manager = manager
 
     def _last_compacted(self, session: object) -> int:
         if isinstance(session, Session):
@@ -68,7 +76,7 @@ class LocalMemoryRuntime:
             runtime_lines=[
                 "Memory mode: local archive",
                 "Prompt memory owned by PromptMemoryStore",
-                "Use session_search for cross-session recall; HISTORY.md is a compatibility artifact.",
+                "Use session_search for cross-session recall; transcript archive is managed separately.",
             ],
         )
 
@@ -95,8 +103,13 @@ class LocalMemoryRuntime:
     ) -> None:
         await self.archive_messages(pending_messages)
 
-    async def consolidate_messages(self, messages: list[MessagePayload]) -> bool:
-        return await self.store.consolidate(messages, self.deps.provider, self.deps.model)
+    async def consolidate_messages(
+        self,
+        messages: list[MessagePayload],
+        output_summary: str = "",
+    ) -> bool:
+        del messages, output_summary
+        return True
 
     def pick_compaction_boundary(
         self,
@@ -136,11 +149,7 @@ class LocalMemoryRuntime:
         )
 
     async def archive_messages(self, messages: list[MessagePayload]) -> bool:
-        if not messages:
-            return True
-        for _ in range(self.config.max_failures_before_raw_archive):
-            if await self.consolidate_messages(messages):
-                return True
+        del messages
         return True
 
     async def maybe_compact_by_tokens(self, session: Session) -> None:
@@ -197,7 +206,10 @@ class LocalMemoryRuntime:
                     source,
                     len(chunk),
                 )
-                if not await self.consolidate_messages(chunk):
+                output_summary = ""
+                if self._output_manager is not None:
+                    output_summary = self._output_manager.build_output_summary(session=session)
+                if not await self.consolidate_messages(chunk, output_summary=output_summary):
                     return
                 self._set_last_compacted(session, end_idx)
                 self.sessions.save(session)
