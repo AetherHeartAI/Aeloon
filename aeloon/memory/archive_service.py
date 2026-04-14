@@ -23,10 +23,13 @@ class RecentArchivedSession:
     source: str
     started_at: float
     updated_at: float
+    ended_at: float | None
+    end_reason: str | None
     message_count: int
     preview: str
     title: str | None
     lineage_id: str
+    parent_session_id: str | None
 
 
 @dataclass(slots=True)
@@ -36,9 +39,13 @@ class SessionSearchHit:
     source: str
     started_at: float
     updated_at: float
+    ended_at: float | None
+    end_reason: str | None
     message_count: int
     preview: str
     title: str | None
+    lineage_id: str
+    parent_session_id: str | None
     snippet: str
     conversation: list[dict[str, object]]
 
@@ -48,6 +55,23 @@ class SessionSearchHit:
         for message in self.conversation:
             parts.append(str(message.get("content") or ""))
         return "\n\n".join(parts)
+
+
+@dataclass(slots=True)
+class ArchivedSessionSnapshot:
+    session_id: str
+    session_key: str
+    source: str
+    started_at: float
+    updated_at: float
+    ended_at: float | None
+    end_reason: str | None
+    message_count: int
+    title: str | None
+    lineage_id: str
+    parent_session_id: str | None
+    metadata: dict[str, object]
+    conversation: list[dict[str, object]]
 
 
 class SessionArchiveService:
@@ -76,26 +100,41 @@ class SessionArchiveService:
         self,
         *,
         limit: int,
-        current_session_key: str | None = None,
+        current_session_id: str | None = None,
+        current_lineage_id: str | None = None,
     ) -> list[RecentArchivedSession]:
-        exclude_lineage_id = (
-            self._lineage_id_for_key(current_session_key) if current_session_key else None
-        )
-        rows = self.db.list_recent_sessions(limit=limit, exclude_lineage_id=exclude_lineage_id)
-        return [
-            RecentArchivedSession(
-                session_id=str(row["id"]),
-                session_key=str(row["session_key"]),
-                source=str(row["source"]),
-                started_at=self._as_float(row["started_at"]),
-                updated_at=self._as_float(row["updated_at"]),
-                message_count=self._as_int(row["message_count"]),
-                preview=str(row["preview"] or ""),
-                title=str(row["title"]) if row.get("title") else None,
-                lineage_id=str(row["lineage_id"]),
+        rows = self.db.list_recent_sessions(limit=limit + 5)
+        sessions: list[RecentArchivedSession] = []
+        for row in rows:
+            session_id = str(row["id"])
+            lineage_id = str(row["lineage_id"])
+            if current_session_id and session_id == current_session_id:
+                continue
+            if current_lineage_id and lineage_id == current_lineage_id:
+                continue
+            if row.get("parent_session_id"):
+                continue
+            sessions.append(
+                RecentArchivedSession(
+                    session_id=session_id,
+                    session_key=str(row["session_key"]),
+                    source=str(row["source"]),
+                    started_at=self._as_float(row["started_at"]),
+                    updated_at=self._as_float(row["updated_at"]),
+                    ended_at=self._as_optional_float(row.get("ended_at")),
+                    end_reason=str(row["end_reason"]) if row.get("end_reason") else None,
+                    message_count=self._as_int(row["message_count"]),
+                    preview=str(row["preview"] or ""),
+                    title=str(row["title"]) if row.get("title") else None,
+                    lineage_id=lineage_id,
+                    parent_session_id=(
+                        str(row["parent_session_id"]) if row.get("parent_session_id") else None
+                    ),
+                )
             )
-            for row in rows
-        ]
+            if len(sessions) >= limit:
+                break
+        return sessions
 
     def search(
         self,
@@ -103,21 +142,22 @@ class SessionArchiveService:
         query: str,
         limit: int,
         role_filter: list[str] | None = None,
-        current_session_key: str | None = None,
+        current_session_id: str | None = None,
+        current_lineage_id: str | None = None,
     ) -> list[SessionSearchHit]:
-        current_lineage_id = (
-            self._lineage_id_for_key(current_session_key) if current_session_key else None
-        )
         raw_results = self.db.search_messages(query=query, role_filter=role_filter, limit=50)
-        seen_session_ids: set[str] = set()
+        seen_lineage_ids: set[str] = set()
         hits: list[SessionSearchHit] = []
         for row in raw_results:
             session_id = str(row["session_id"])
-            if session_id in seen_session_ids:
+            lineage_id = str(row["lineage_id"])
+            if current_session_id and session_id == current_session_id:
                 continue
-            if current_lineage_id and str(row["lineage_id"]) == current_lineage_id:
+            if current_lineage_id and lineage_id == current_lineage_id:
                 continue
-            seen_session_ids.add(session_id)
+            if lineage_id in seen_lineage_ids:
+                continue
+            seen_lineage_ids.add(lineage_id)
             conversation = self.db.get_messages_as_conversation(session_id)
             hits.append(
                 SessionSearchHit(
@@ -126,9 +166,15 @@ class SessionArchiveService:
                     source=str(row["source"]),
                     started_at=self._as_float(row["started_at"]),
                     updated_at=self._as_float(row["updated_at"]),
+                    ended_at=self._as_optional_float(row.get("ended_at")),
+                    end_reason=str(row["end_reason"]) if row.get("end_reason") else None,
                     message_count=self._as_int(row["message_count"]),
                     preview=str(row.get("preview") or ""),
                     title=str(row["title"]) if row.get("title") else None,
+                    lineage_id=lineage_id,
+                    parent_session_id=(
+                        str(row["parent_session_id"]) if row.get("parent_session_id") else None
+                    ),
                     snippet=str(row["snippet"] or ""),
                     conversation=conversation,
                 )
@@ -140,24 +186,55 @@ class SessionArchiveService:
     async def close(self) -> None:
         self.db.close()
 
+    def load_session_snapshot(self, session_id: str) -> ArchivedSessionSnapshot | None:
+        row = self.db.get_session(session_id)
+        if row is None:
+            return None
+        metadata_raw = row.get("metadata_json")
+        metadata: dict[str, object] = {}
+        if isinstance(metadata_raw, str) and metadata_raw.strip():
+            try:
+                loaded = json.loads(metadata_raw)
+                if isinstance(loaded, dict):
+                    metadata = loaded
+            except json.JSONDecodeError:
+                metadata = {}
+        return ArchivedSessionSnapshot(
+            session_id=str(row["id"]),
+            session_key=str(row["session_key"]),
+            source=str(row["source"]),
+            started_at=self._as_float(row["started_at"]),
+            updated_at=self._as_float(row["updated_at"]),
+            ended_at=self._as_optional_float(row.get("ended_at")),
+            end_reason=str(row["end_reason"]) if row.get("end_reason") else None,
+            message_count=self._as_int(row["message_count"]),
+            title=str(row["title"]) if row.get("title") else None,
+            lineage_id=str(row["lineage_id"]),
+            parent_session_id=(
+                str(row["parent_session_id"]) if row.get("parent_session_id") else None
+            ),
+            metadata=metadata,
+            conversation=self.db.get_messages_as_conversation(session_id),
+        )
+
     def _build_session_record(self, session: Session) -> ArchivedSessionRecord:
         source, chat_id = self._split_session_key(session.key)
         metadata = dict(session.metadata)
-        lineage_key = str(metadata.get("lineage_id") or session.key)
-        parent_key = metadata.get("parent_session_key")
         title = metadata.get("title")
         metadata_json = json.dumps(metadata, ensure_ascii=False) if metadata else None
         return ArchivedSessionRecord(
-            id=self._session_id_for_key(session.key),
+            id=session.archive_session_id,
             session_key=session.key,
             workspace=self._workspace_id,
             source=source,
             chat_id=chat_id,
-            lineage_id=self._lineage_id_for_key(lineage_key),
-            parent_session_id=self._session_id_for_key(str(parent_key)) if parent_key else None,
+            lineage_id=session.lineage_id or session.archive_session_id,
+            parent_session_id=session.parent_archive_session_id,
             title=str(title) if isinstance(title, str) else None,
             started_at=session.created_at.timestamp(),
             updated_at=session.updated_at.timestamp(),
+            ended_at=session.ended_at.timestamp() if session.ended_at else None,
+            end_reason=session.end_reason,
             message_count=len(session.messages),
             metadata_json=metadata_json,
         )
@@ -193,12 +270,6 @@ class SessionArchiveService:
             )
         return records
 
-    def _session_id_for_key(self, session_key: str) -> str:
-        return f"{self._workspace_id}::{session_key}"
-
-    def _lineage_id_for_key(self, session_key: str | None) -> str:
-        return self._session_id_for_key(session_key or "")
-
     @staticmethod
     def _split_session_key(session_key: str) -> tuple[str, str | None]:
         if ":" in session_key:
@@ -233,3 +304,12 @@ class SessionArchiveService:
         if isinstance(value, int):
             return value
         return int(str(value))
+
+    @staticmethod
+    def _as_optional_float(value: object) -> float | None:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        text = str(value).strip()
+        return float(text) if text else None

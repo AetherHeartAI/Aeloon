@@ -81,9 +81,11 @@ class SessionSearchTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Search past session transcripts or browse recent sessions. "
-            "Use this when the user references prior work, asks what happened before, "
-            "or you need cross-session recall."
+            "Search archived session transcripts or browse recent sessions. "
+            "This is the primary cross-session recall surface. "
+            "Use it when the user references prior work, asks what happened before, "
+            "or you need cross-session recall. Do not read memory/HISTORY.md for "
+            "normal history recall unless the user explicitly asks for that file."
         )
 
     @property
@@ -122,13 +124,22 @@ class SessionSearchTool(Tool):
         role_filter_value = kwargs.get("role_filter")
         limit_raw = kwargs.get("limit")
         limit = limit_raw if isinstance(limit_raw, int) else int(str(limit_raw or 3))
-        current_session_key = self._turn_context.session_key if self._turn_context else None
+        current_session_id = None
+        current_lineage_id = None
+        if self._turn_context is not None:
+            raw_session_id = self._turn_context.metadata.get("archive_session_id")
+            if isinstance(raw_session_id, str) and raw_session_id:
+                current_session_id = raw_session_id
+            raw_lineage_id = self._turn_context.metadata.get("lineage_id")
+            if isinstance(raw_lineage_id, str) and raw_lineage_id:
+                current_lineage_id = raw_lineage_id
         role_filter = self._parse_role_filter(role_filter_value)
 
         if not query:
             sessions = self.service.list_recent_sessions(
                 limit=limit,
-                current_session_key=current_session_key,
+                current_session_id=current_session_id,
+                current_lineage_id=current_lineage_id,
             )
             return json.dumps(
                 {
@@ -144,7 +155,8 @@ class SessionSearchTool(Tool):
             query=query,
             limit=limit,
             role_filter=role_filter,
-            current_session_key=current_session_key,
+            current_session_id=current_session_id,
+            current_lineage_id=current_lineage_id,
         )
         results = []
         for hit in hits:
@@ -156,8 +168,14 @@ class SessionSearchTool(Tool):
             results.append(
                 {
                     "session_key": hit.session_key,
+                    "session_id": hit.session_id,
+                    "lineage_id": hit.lineage_id,
                     "source": hit.source,
                     "started_at": _format_timestamp(hit.started_at),
+                    "updated_at": _format_timestamp(hit.updated_at),
+                    "message_count": hit.message_count,
+                    "preview": hit.preview,
+                    "title": hit.title,
                     "summary": summary,
                 }
             )
@@ -211,7 +229,9 @@ class SessionSearchTool(Tool):
     @staticmethod
     def _recent_result(session: RecentArchivedSession) -> dict[str, object]:
         return {
+            "session_id": session.session_id,
             "session_key": session.session_key,
+            "lineage_id": session.lineage_id,
             "source": session.source,
             "started_at": _format_timestamp(session.started_at),
             "updated_at": _format_timestamp(session.updated_at),

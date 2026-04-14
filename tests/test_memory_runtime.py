@@ -133,7 +133,11 @@ class _DummyProviderManager:
 
 
 class _DummyArchiveService:
+    def __init__(self) -> None:
+        self.ingested_session_ids: list[str] = []
+
     async def ingest_session(self, session: Session) -> None:
+        self.ingested_session_ids.append(session.archive_session_id)
         return None
 
     async def close(self) -> None:
@@ -281,6 +285,30 @@ async def test_memory_runtime_flush_delegates_to_flush_coordinator(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_memory_runtime_after_turn_ingests_archive_before_returning(tmp_path: Path) -> None:
+    from aeloon.memory.runtime import MemoryRuntime
+
+    archive = _DummyArchiveService()
+    runtime = MemoryRuntime(
+        memory_config=Config().memory,
+        deps=_make_deps(tmp_path),
+        local_memory=_DummyLocalMemory(),
+        session_archive=archive,
+    )
+    session = Session(key="cli:test")
+
+    await runtime.after_turn(
+        session=session,
+        raw_new_messages=[],
+        persisted_new_messages=[],
+        final_content="ok",
+    )
+
+    assert archive.ingested_session_ids == [session.archive_session_id]
+    await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_memory_runtime_on_shutdown_flushes_then_closes_components(tmp_path: Path) -> None:
     from aeloon.memory.runtime import MemoryRuntime
 
@@ -328,6 +356,31 @@ async def test_memory_runtime_on_shutdown_flushes_then_closes_components(tmp_pat
         "flush-close",
         "local-close",
     ]
+
+
+@pytest.mark.asyncio
+async def test_memory_runtime_prepare_turn_does_not_advertise_history_log_path(
+    tmp_path: Path,
+) -> None:
+    from aeloon.memory.runtime import MemoryRuntime
+
+    runtime = MemoryRuntime(
+        memory_config=Config().memory,
+        deps=_make_deps(tmp_path),
+        local_memory=_DummyLocalMemory(),
+        session_archive=_DummyArchiveService(),
+    )
+
+    prepared = await runtime.prepare_turn(
+        session=Session(key="cli:test"),
+        query="hello",
+        channel="cli",
+        chat_id="direct",
+        current_role="user",
+    )
+
+    joined = "\n".join(prepared.runtime_lines)
+    assert "HISTORY.md" not in joined
 
 
 def test_memory_runtime_forwards_output_manager_to_local_memory(tmp_path: Path) -> None:

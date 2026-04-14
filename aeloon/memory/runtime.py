@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Coroutine
-from typing import Protocol
+from datetime import datetime
+from typing import TYPE_CHECKING, Protocol
 
 from loguru import logger
 
@@ -18,6 +19,10 @@ from aeloon.memory.prompt_store import PromptMemoryStore
 from aeloon.memory.providers.manager import ProviderManager
 from aeloon.memory.security import build_memory_context_block
 from aeloon.memory.types import MemoryRuntimeDeps, MessagePayload, TurnMemoryContext
+
+if TYPE_CHECKING:
+    from aeloon.core.agent.output_manager import OutputManager
+    from aeloon.core.agent.tools.base import Tool
 
 
 class LocalMemoryProtocol(Protocol):
@@ -35,6 +40,7 @@ class LocalMemoryProtocol(Protocol):
         self,
         *,
         session: object,
+        query: str,
         raw_new_messages: list[MessagePayload],
         persisted_new_messages: list[MessagePayload],
         final_content: str | None,
@@ -71,6 +77,8 @@ class FlushCoordinatorProtocol(Protocol):
 class ProviderManagerProtocol(Protocol):
     def system_prompt_sections(self) -> list[str]: ...
 
+    def tools(self) -> list["Tool"]: ...
+
     def always_skill_names(self) -> list[str]: ...
 
     async def prefetch(
@@ -92,14 +100,40 @@ class ProviderManagerProtocol(Protocol):
         final_content: str | None,
     ) -> None: ...
 
+    async def queue_prefetch(
+        self,
+        *,
+        session: object,
+        query: str,
+        channel: str | None,
+        chat_id: str | None,
+        current_role: str,
+    ) -> None: ...
+
     async def on_pre_compress(
         self,
         *,
         session: object,
         pending_messages: list[MessagePayload],
+        reason: str | None = None,
     ) -> None: ...
 
-    async def on_memory_write(self, *, action: str, target: str, content: str) -> None: ...
+    async def on_memory_write(
+        self,
+        *,
+        action: str,
+        target: str,
+        content: str,
+        session_key: str | None = None,
+    ) -> None: ...
+
+    async def on_session_end(
+        self,
+        *,
+        session: object,
+        pending_messages: list[MessagePayload],
+        reason: str | None = None,
+    ) -> None: ...
 
     async def shutdown(self) -> None: ...
 
@@ -141,7 +175,11 @@ class MemoryRuntime:
         if self.provider_manager is None and memory_config.provider:
             self.provider_manager = ProviderManager.from_config(memory_config, deps)
         self.flush_coordinator = flush_coordinator
-        if self.flush_coordinator is None and memory_config.flush.enabled and self.prompt_memory is not None:
+        if (
+            self.flush_coordinator is None
+            and memory_config.flush.enabled
+            and self.prompt_memory is not None
+        ):
             self.flush_coordinator = MemoryFlushCoordinator(
                 provider=deps.provider,
                 model=deps.model,
@@ -157,6 +195,11 @@ class MemoryRuntime:
         deps = getattr(self.local_memory, "deps", None)
         if isinstance(deps, MemoryRuntimeDeps):
             deps.flush_before_loss = callback
+
+    def set_output_manager(self, manager: OutputManager) -> None:
+        setter = getattr(self.local_memory, "set_output_manager", None)
+        if callable(setter):
+            setter(manager)
 
     async def prepare_turn(
         self,
@@ -178,7 +221,9 @@ class MemoryRuntime:
         sections = list(prepared.system_sections)
         skills = list(prepared.always_skill_names)
         if self.prompt_memory is not None:
-            snapshot = session.get_prompt_memory_snapshot() if isinstance(session, Session) else None
+            snapshot = (
+                session.get_prompt_memory_snapshot() if isinstance(session, Session) else None
+            )
             if snapshot is None:
                 self.prompt_memory.load_from_disk()
                 over_limit = self.prompt_memory.over_limit_status()
@@ -234,28 +279,42 @@ class MemoryRuntime:
         self,
         *,
         session: object,
+        query: str,
         raw_new_messages: list[MessagePayload],
         persisted_new_messages: list[MessagePayload],
         final_content: str | None,
     ) -> None:
-        async def _after_turn_task() -> None:
-            if self.session_archive is not None and isinstance(session, Session):
-                await self.session_archive.ingest_session(session)
-            await self.local_memory.after_turn(
+        if self.session_archive is not None and isinstance(session, Session):
+            await self.session_archive.ingest_session(session)
+
+        self._track_task(
+            self.local_memory.after_turn(
                 session=session,
+                query=query,
                 raw_new_messages=raw_new_messages,
                 persisted_new_messages=persisted_new_messages,
                 final_content=final_content,
             )
-            if self.provider_manager is not None:
-                await self.provider_manager.sync_turn(
+        )
+
+        if self.provider_manager is not None:
+            self._track_task(
+                self.provider_manager.sync_turn(
                     session=session,
                     raw_new_messages=raw_new_messages,
                     persisted_new_messages=persisted_new_messages,
                     final_content=final_content,
                 )
-
-        self._track_task(_after_turn_task())
+            )
+            self._track_task(
+                self.provider_manager.queue_prefetch(
+                    session=session,
+                    query=query,
+                    channel=None,
+                    chat_id=None,
+                    current_role="user",
+                )
+            )
 
     async def on_new_session(
         self,
@@ -293,6 +352,7 @@ class MemoryRuntime:
                 await self.provider_manager.on_pre_compress(
                     session=session,
                     pending_messages=list(pending_messages or []),
+                    reason=reason,
                 )
             return
         pending = list(pending_messages or [])
@@ -305,7 +365,32 @@ class MemoryRuntime:
             await self.provider_manager.on_pre_compress(
                 session=session,
                 pending_messages=pending,
+                reason=reason,
             )
+
+    async def finalize_session(
+        self,
+        *,
+        session: Session,
+        pending_messages: list[MessagePayload] | None = None,
+        reason: str,
+    ) -> None:
+        pending = list(pending_messages or [])
+        await self.flush(
+            session=session,
+            pending_messages=pending,
+            reason=reason,
+        )
+        if self.provider_manager is not None:
+            await self.provider_manager.on_session_end(
+                session=session,
+                pending_messages=pending,
+                reason=reason,
+            )
+        session.ended_at = datetime.now()
+        session.end_reason = reason
+        if self.session_archive is not None:
+            await self.session_archive.ingest_session(session)
 
     async def on_shutdown(
         self,
@@ -314,7 +399,13 @@ class MemoryRuntime:
         pending_messages: list[MessagePayload] | None = None,
         reason: str | None = None,
     ) -> None:
-        if session is not None:
+        if isinstance(session, Session):
+            await self.finalize_session(
+                session=session,
+                pending_messages=pending_messages,
+                reason=reason or "shutdown",
+            )
+        elif session is not None:
             await self.flush(
                 session=session,
                 pending_messages=pending_messages,

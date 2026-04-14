@@ -68,7 +68,7 @@ class LocalMemoryRuntime:
             runtime_lines=[
                 "Memory mode: local archive",
                 "Prompt memory owned by PromptMemoryStore",
-                f"History log: {self.history_file}",
+                "Use session_search for cross-session recall; HISTORY.md is a compatibility artifact.",
             ],
         )
 

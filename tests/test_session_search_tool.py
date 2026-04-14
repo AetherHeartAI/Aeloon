@@ -65,7 +65,17 @@ def _tool(tmp_path: Path, provider: _SummaryProvider):
         )
     )
     tool = SessionSearchTool(service=service, provider=provider, model="test-model")
-    tool.on_turn_start(TurnContext(channel="cli", chat_id="alpha", session_key="cli:current"))
+    tool.on_turn_start(
+        TurnContext(
+            channel="cli",
+            chat_id="alpha",
+            session_key="cli:current",
+            metadata={
+                "archive_session_id": "current-session",
+                "lineage_id": "current-lineage",
+            },
+        )
+    )
     return tool
 
 
@@ -78,6 +88,8 @@ async def test_session_search_tool_recent_mode_lists_recent_sessions(tmp_path: P
     assert payload["mode"] == "recent"
     assert payload["count"] == 2
     assert payload["results"][0]["session_key"] == "cli:beta"
+    assert "session_id" in payload["results"][0]
+    assert "lineage_id" in payload["results"][0]
 
 
 @pytest.mark.asyncio
@@ -89,6 +101,8 @@ async def test_session_search_tool_search_mode_returns_summaries(tmp_path: Path)
 
     assert payload["count"] == 1
     assert payload["results"][0]["session_key"] == "cli:alpha"
+    assert payload["results"][0]["session_id"]
+    assert payload["results"][0]["lineage_id"]
     assert "docker networking fix" in payload["results"][0]["summary"].lower()
     assert provider.calls
 

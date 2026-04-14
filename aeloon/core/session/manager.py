@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from loguru import logger
 
@@ -26,11 +27,20 @@ class Session:
     """
 
     key: str  # channel:chat_id
+    archive_session_id: str = field(default_factory=lambda: f"session-{uuid4().hex}")
+    lineage_id: str = ""
+    parent_archive_session_id: str | None = None
+    ended_at: datetime | None = None
+    end_reason: str | None = None
     messages: list[dict[str, Any]] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     metadata: dict[str, Any] = field(default_factory=dict)
     memory_state: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.lineage_id:
+            self.lineage_id = self.archive_session_id
 
     def _local_memory_state(self, *, create: bool = True) -> dict[str, Any]:
         raw_local_state = self.memory_state.get("local")
@@ -189,6 +199,9 @@ class SessionManager:
         safe_key = safe_filename(key.replace(":", "_"))
         return self.legacy_sessions_dir / f"{safe_key}.jsonl"
 
+    def _legacy_archive_session_id(self, key: str) -> str:
+        return f"{self.workspace.resolve()}::{key}"
+
     def get_or_create(self, key: str) -> Session:
         """
         Get an existing session or create a new one.
@@ -228,7 +241,13 @@ class SessionManager:
             messages = []
             metadata = {}
             created_at = None
+            updated_at = None
             memory_state: dict[str, Any] = {}
+            archive_session_id = ""
+            lineage_id = ""
+            parent_archive_session_id: str | None = None
+            ended_at: datetime | None = None
+            end_reason: str | None = None
 
             with open(path, encoding="utf-8") as f:
                 for line in f:
@@ -245,6 +264,11 @@ class SessionManager:
                             if data.get("created_at")
                             else None
                         )
+                        updated_at = (
+                            datetime.fromisoformat(data["updated_at"])
+                            if data.get("updated_at")
+                            else None
+                        )
                         raw_memory_state = data.get("memory_state", {})
                         if isinstance(raw_memory_state, dict):
                             memory_state = raw_memory_state
@@ -255,13 +279,39 @@ class SessionManager:
                             memory_state = {
                                 "local": {"last_compacted": data.get("last_consolidated", 0)}
                             }
+                        raw_archive_session_id = data.get("archive_session_id")
+                        if isinstance(raw_archive_session_id, str) and raw_archive_session_id:
+                            archive_session_id = raw_archive_session_id
+                        raw_lineage_id = data.get("lineage_id")
+                        if isinstance(raw_lineage_id, str) and raw_lineage_id:
+                            lineage_id = raw_lineage_id
+                        raw_parent_archive_session_id = data.get("parent_archive_session_id")
+                        if (
+                            isinstance(raw_parent_archive_session_id, str)
+                            and raw_parent_archive_session_id
+                        ):
+                            parent_archive_session_id = raw_parent_archive_session_id
+                        raw_ended_at = data.get("ended_at")
+                        if isinstance(raw_ended_at, str) and raw_ended_at:
+                            ended_at = datetime.fromisoformat(raw_ended_at)
+                        raw_end_reason = data.get("end_reason")
+                        if isinstance(raw_end_reason, str) and raw_end_reason:
+                            end_reason = raw_end_reason
                     else:
                         messages.append(data)
 
+            resolved_archive_session_id = archive_session_id or self._legacy_archive_session_id(key)
+            resolved_lineage_id = lineage_id or resolved_archive_session_id
             return Session(
                 key=key,
+                archive_session_id=resolved_archive_session_id,
+                lineage_id=resolved_lineage_id,
+                parent_archive_session_id=parent_archive_session_id,
+                ended_at=ended_at,
+                end_reason=end_reason,
                 messages=messages,
                 created_at=created_at or datetime.now(),
+                updated_at=updated_at or datetime.now(),
                 metadata=metadata,
                 memory_state=memory_state,
             )
@@ -280,6 +330,11 @@ class SessionManager:
                 "key": session.key,
                 "created_at": session.created_at.isoformat(),
                 "updated_at": session.updated_at.isoformat(),
+                "archive_session_id": session.archive_session_id,
+                "lineage_id": session.lineage_id,
+                "parent_archive_session_id": session.parent_archive_session_id,
+                "ended_at": session.ended_at.isoformat() if session.ended_at else None,
+                "end_reason": session.end_reason,
                 "metadata": session.metadata,
                 "memory_state": session.memory_state,
             }
@@ -350,6 +405,18 @@ class SessionManager:
     def invalidate(self, key: str) -> None:
         """Remove a session from the in-memory cache."""
         self._cache.pop(key, None)
+
+    def rollover(self, key: str, *, reason: str) -> tuple[Session, Session]:
+        """End the current active session and create a fresh replacement for the same route key."""
+        current = self.get_or_create(key)
+        current.ended_at = datetime.now()
+        current.end_reason = reason
+        current.updated_at = datetime.now()
+
+        replacement = Session(key=key)
+        replacement.lineage_id = replacement.archive_session_id
+        self._cache[key] = replacement
+        return current, replacement
 
     def archive_metadata(self, session: Session) -> dict[str, object]:
         """Return archive-friendly metadata for a session snapshot."""

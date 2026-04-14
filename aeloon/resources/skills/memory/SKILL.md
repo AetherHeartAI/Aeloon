@@ -37,7 +37,7 @@ Do not store:
 
 ## Transcript Recall
 
-Use transcript-recall tooling for past conversations when available. `HISTORY.md` remains a compatibility artifact, not the preferred long-term recall interface.
+Use transcript-recall tooling for past conversations when available. `session_search` is the primary cross-session recall interface. `HISTORY.md` remains a compatibility/debug artifact, not the preferred long-term recall interface.
 
 ## Prompt-Memory Scope
 

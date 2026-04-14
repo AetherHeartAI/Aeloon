@@ -81,7 +81,43 @@ def test_archive_db_excludes_current_lineage_from_search_results(tmp_path: Path)
 
     service.ingest_session_sync(current)
     service.ingest_session_sync(other)
-    hits = service.search(query="session_search", limit=5, current_session_key="cli:current")
+    hits = service.search(
+        query="session_search",
+        limit=5,
+        current_session_id=current.archive_session_id,
+        current_lineage_id=current.lineage_id,
+    )
 
     assert [hit.session_key for hit in hits] == ["cli:other"]
+    db.close()
+
+
+def test_archive_db_recent_mode_keeps_prior_sessions_after_rollover(tmp_path: Path) -> None:
+    from aeloon.memory.archive_db import SessionArchiveDB
+    from aeloon.memory.archive_service import SessionArchiveService
+
+    db = SessionArchiveDB(tmp_path / "archive.db")
+    service = SessionArchiveService(db=db, workspace=tmp_path)
+    old = _make_session(
+        "cli:test",
+        ("user", "Old archived conversation."),
+        ("assistant", "Old archived answer."),
+    )
+    current = _make_session(
+        "cli:test",
+        ("user", "Current archived conversation."),
+        ("assistant", "Current archived answer."),
+    )
+    current.lineage_id = current.archive_session_id
+
+    service.ingest_session_sync(old)
+    service.ingest_session_sync(current)
+
+    recent = service.list_recent_sessions(
+        limit=5,
+        current_session_id=current.archive_session_id,
+        current_lineage_id=current.lineage_id,
+    )
+
+    assert [item.session_id for item in recent] == [old.archive_session_id]
     db.close()

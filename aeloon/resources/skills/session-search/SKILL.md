@@ -13,6 +13,8 @@ Use `session_search` when the user refers to earlier work, past decisions, previ
 - browse recent sessions by calling `session_search` without a query
 - search by topic with OR-joined keywords for broader recall
 - treat the returned summaries as the primary recall surface
+- do not read `memory/HISTORY.md` for normal cross-session recall
+- only inspect `HISTORY.md` when the user explicitly asks for that file or you are debugging archive behavior
 
 ## Good Triggers
 

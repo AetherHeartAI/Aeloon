@@ -40,6 +40,18 @@ def _make_deps(tmp_path: Path) -> MemoryRuntimeDeps:
     )
 
 
+class _ArchiveRecorder:
+    def __init__(self, events: list[str] | None = None) -> None:
+        self.events = events
+
+    async def ingest_session(self, session: Session) -> None:
+        if self.events is not None:
+            self.events.append(f"archive:{session.end_reason or 'turn'}")
+
+    async def close(self) -> None:
+        return None
+
+
 @pytest.mark.asyncio
 async def test_memory_runtime_drains_background_tasks_on_close(tmp_path: Path) -> None:
     from aeloon.memory.runtime import MemoryRuntime
@@ -99,7 +111,7 @@ async def test_memory_runtime_drains_background_tasks_on_close(tmp_path: Path) -
         memory_config=Config().memory,
         deps=_make_deps(tmp_path),
         local_memory=DummyLocalMemory(),
-        session_archive=None,
+        session_archive=_ArchiveRecorder(),
         flush_coordinator=None,
     )
 
@@ -168,7 +180,7 @@ async def test_memory_runtime_schedules_new_session_hook(tmp_path: Path) -> None
         memory_config=Config().memory,
         deps=_make_deps(tmp_path),
         local_memory=DummyLocalMemory(),
-        session_archive=None,
+        session_archive=_ArchiveRecorder(),
         flush_coordinator=None,
     )
 
@@ -242,7 +254,7 @@ async def test_memory_runtime_on_shutdown_flushes_before_close(tmp_path: Path) -
         memory_config=Config().memory,
         deps=_make_deps(tmp_path),
         local_memory=DummyLocalMemory(),
-        session_archive=None,
+        session_archive=_ArchiveRecorder(events),
         flush_coordinator=Flush(),
     )
 
@@ -252,4 +264,81 @@ async def test_memory_runtime_on_shutdown_flushes_before_close(tmp_path: Path) -
         reason="gateway-shutdown",
     )
 
-    assert events == ["flush:gateway-shutdown", "flush-close", "local-close"]
+    assert events == ["flush:gateway-shutdown", "archive:gateway-shutdown", "flush-close", "local-close"]
+
+
+@pytest.mark.asyncio
+async def test_memory_runtime_finalize_session_archives_end_reason(tmp_path: Path) -> None:
+    from aeloon.memory.runtime import MemoryRuntime
+
+    events: list[str] = []
+
+    class DummyLocalMemory:
+        async def prepare_turn(
+            self,
+            *,
+            session: object,
+            query: str,
+            channel: str | None,
+            chat_id: str | None,
+            current_role: str,
+        ) -> TurnMemoryContext:
+            return TurnMemoryContext()
+
+        async def after_turn(
+            self,
+            *,
+            session: object,
+            raw_new_messages: list[dict[str, object]],
+            persisted_new_messages: list[dict[str, object]],
+            final_content: str | None,
+        ) -> None:
+            return None
+
+        def pending_start_index(self, session: object) -> int:
+            return 0
+
+        def estimate_session_prompt_tokens(self, session: Session) -> tuple[int, str]:
+            return (0, "none")
+
+        async def on_new_session(
+            self,
+            *,
+            session: object,
+            pending_messages: list[dict[str, object]],
+        ) -> None:
+            return None
+
+        async def maybe_compact_by_tokens(self, session: Session) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+    class Flush:
+        async def flush(
+            self, *, session: object, pending_messages, reason: str | None = None
+        ) -> None:
+            events.append(f"flush:{reason}")
+
+        async def close(self) -> None:
+            return None
+
+    runtime = MemoryRuntime(
+        memory_config=Config().memory,
+        deps=_make_deps(tmp_path),
+        local_memory=DummyLocalMemory(),
+        session_archive=_ArchiveRecorder(events),
+        flush_coordinator=Flush(),
+    )
+    session = Session(key="cli:test")
+
+    await runtime.finalize_session(
+        session=session,
+        pending_messages=[{"role": "user", "content": "bye"}],
+        reason="cli-shutdown",
+    )
+
+    assert session.end_reason == "cli-shutdown"
+    assert session.ended_at is not None
+    assert events == ["flush:cli-shutdown", "archive:cli-shutdown"]

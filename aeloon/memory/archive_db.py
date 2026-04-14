@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     title TEXT,
     started_at REAL NOT NULL,
     updated_at REAL NOT NULL,
+    ended_at REAL,
+    end_reason TEXT,
     message_count INTEGER DEFAULT 0,
     metadata_json TEXT
 );
@@ -94,6 +96,8 @@ class ArchivedSessionRecord:
     title: str | None
     started_at: float
     updated_at: float
+    ended_at: float | None
+    end_reason: str | None
     message_count: int
     metadata_json: str | None
 
@@ -125,6 +129,14 @@ class SessionArchiveDB:
     def _init_schema(self) -> None:
         cursor = self._conn.cursor()
         cursor.executescript(SCHEMA_SQL)
+        columns = {
+            str(row["name"])
+            for row in cursor.execute("PRAGMA table_info(sessions)").fetchall()
+        }
+        if "ended_at" not in columns:
+            cursor.execute("ALTER TABLE sessions ADD COLUMN ended_at REAL")
+        if "end_reason" not in columns:
+            cursor.execute("ALTER TABLE sessions ADD COLUMN end_reason TEXT")
         try:
             cursor.execute("SELECT * FROM messages_fts LIMIT 0")
         except sqlite3.OperationalError:
@@ -149,8 +161,9 @@ class SessionArchiveDB:
                 """
                 INSERT INTO sessions (
                     id, session_key, workspace, source, chat_id, lineage_id,
-                    parent_session_id, title, started_at, updated_at, message_count, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    parent_session_id, title, started_at, updated_at, ended_at, end_reason,
+                    message_count, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     session_key=excluded.session_key,
                     workspace=excluded.workspace,
@@ -161,6 +174,8 @@ class SessionArchiveDB:
                     title=excluded.title,
                     started_at=excluded.started_at,
                     updated_at=excluded.updated_at,
+                    ended_at=excluded.ended_at,
+                    end_reason=excluded.end_reason,
                     message_count=excluded.message_count,
                     metadata_json=excluded.metadata_json
                 """,
@@ -175,6 +190,8 @@ class SessionArchiveDB:
                     session.title,
                     session.started_at,
                     session.updated_at,
+                    session.ended_at,
+                    session.end_reason,
                     session.message_count,
                     session.metadata_json,
                 ),
@@ -202,12 +219,9 @@ class SessionArchiveDB:
 
         self._execute_write(_do)
 
-    def list_recent_sessions(self, limit: int, exclude_lineage_id: str | None = None) -> list[dict[str, object]]:
+    def list_recent_sessions(self, limit: int) -> list[dict[str, object]]:
         """Return recent archived sessions with previews."""
-        where_sql = "WHERE lineage_id != ?" if exclude_lineage_id else ""
-        params: list[object] = [exclude_lineage_id] if exclude_lineage_id else []
-        params.append(limit)
-        query = f"""
+        query = """
             SELECT s.*,
                 COALESCE(
                     (
@@ -220,12 +234,11 @@ class SessionArchiveDB:
                     ''
                 ) AS preview
             FROM sessions s
-            {where_sql}
             ORDER BY s.updated_at DESC
             LIMIT ?
         """
         with self._lock:
-            rows = self._conn.execute(query, params).fetchall()
+            rows = self._conn.execute(query, (limit,)).fetchall()
         return [dict(row) for row in rows]
 
     def search_messages(
@@ -259,6 +272,8 @@ class SessionArchiveDB:
                 s.title,
                 s.started_at,
                 s.updated_at,
+                s.ended_at,
+                s.end_reason,
                 s.message_count,
                 snippet(messages_fts, 0, '>>>', '<<<', '...', 40) AS snippet
             FROM messages_fts
