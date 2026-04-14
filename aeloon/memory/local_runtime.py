@@ -76,6 +76,7 @@ class LocalMemoryRuntime:
         self,
         *,
         session: object,
+        query: str,
         raw_new_messages: list[MessagePayload],
         persisted_new_messages: list[MessagePayload],
         final_content: str | None,

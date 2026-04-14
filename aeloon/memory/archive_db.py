@@ -130,8 +130,7 @@ class SessionArchiveDB:
         cursor = self._conn.cursor()
         cursor.executescript(SCHEMA_SQL)
         columns = {
-            str(row["name"])
-            for row in cursor.execute("PRAGMA table_info(sessions)").fetchall()
+            str(row["name"]) for row in cursor.execute("PRAGMA table_info(sessions)").fetchall()
         }
         if "ended_at" not in columns:
             cursor.execute("ALTER TABLE sessions ADD COLUMN ended_at REAL")
@@ -293,7 +292,9 @@ class SessionArchiveDB:
     def get_session(self, session_id: str) -> dict[str, object] | None:
         """Return one archived session row."""
         with self._lock:
-            row = self._conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            row = self._conn.execute(
+                "SELECT * FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
         return dict(row) if row else None
 
     def get_messages_as_conversation(self, session_id: str) -> list[dict[str, object]]:
@@ -368,7 +369,7 @@ class SessionArchiveDB:
         import re
 
         sanitized = re.sub(r'"[^"]*"', _preserve_quoted, query)
-        sanitized = re.sub(r'[+{}()\"^]', " ", sanitized)
+        sanitized = re.sub(r"[+{}()\"^]", " ", sanitized)
         sanitized = re.sub(r"\*+", "*", sanitized)
         sanitized = re.sub(r"(^|\s)\*", r"\1", sanitized)
         sanitized = re.sub(r"(?i)^(AND|OR|NOT)\b\s*", "", sanitized.strip())

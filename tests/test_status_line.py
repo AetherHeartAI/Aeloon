@@ -152,7 +152,9 @@ class TestStatusLineManager:
         loop.context_window_tokens = 65536
 
         mgr = StatusLineManager(loop)
-        with patch.object(loop.memory, "estimate_session_prompt_tokens", return_value=(60000, "mock")):
+        with patch.object(
+            loop.memory, "estimate_session_prompt_tokens", return_value=(60000, "mock")
+        ):
             result = mgr.build_toolbar("cli", "direct")
 
         # Find the context part — should have ansired style

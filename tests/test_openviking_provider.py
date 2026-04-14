@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
@@ -64,6 +64,7 @@ class FakeOpenVikingSession:
     session_id: str
     existing_session_ids: set[str]
     messages: list[tuple[str, str | None]] = field(default_factory=list)
+    parts_history: list[list[dict[str, object]] | None] = field(default_factory=list)
     commit_calls: int = 0
 
     async def ensure_exists(self) -> None:
@@ -76,6 +77,7 @@ class FakeOpenVikingSession:
         parts: list[dict[str, object]] | None = None,
     ) -> dict[str, object]:
         self.messages.append((role, content))
+        self.parts_history.append(parts)
         return {"session_id": self.session_id, "message_count": len(self.messages)}
 
     async def commit(self) -> dict[str, object]:
@@ -91,10 +93,24 @@ class FakeOpenVikingClient:
     path: str | None
     search_result: FakeFindResult = field(default_factory=FakeFindResult)
     find_result: FakeFindResult = field(default_factory=FakeFindResult)
+    abstract_result: str = "abstract"
+    overview_result: str = "overview"
+    read_result: str = "full"
+    ls_result: list[dict[str, object]] = field(default_factory=list)
+    tree_result: list[dict[str, object]] = field(default_factory=list)
+    stat_result: dict[str, object] = field(default_factory=dict)
+    add_resource_result: dict[str, object] = field(default_factory=dict)
     initialized: bool = False
     closed: bool = False
     search_calls: list[dict[str, object]] = field(default_factory=list)
     find_calls: list[dict[str, object]] = field(default_factory=list)
+    abstract_calls: list[str] = field(default_factory=list)
+    overview_calls: list[str] = field(default_factory=list)
+    read_calls: list[str] = field(default_factory=list)
+    ls_calls: list[str] = field(default_factory=list)
+    tree_calls: list[str] = field(default_factory=list)
+    stat_calls: list[str] = field(default_factory=list)
+    add_resource_calls: list[dict[str, object]] = field(default_factory=list)
     wait_processed_calls: list[float | None] = field(default_factory=list)
     commit_session_calls: list[str] = field(default_factory=list)
     delete_session_calls: list[str] = field(default_factory=list)
@@ -173,6 +189,7 @@ class FakeOpenVikingClient:
         query: str,
         target_uri: str = "",
         limit: int = 10,
+        mode: str = "auto",
         score_threshold: float | None = None,
         filter: dict[str, object] | None = None,
         telemetry: bool = False,
@@ -182,10 +199,43 @@ class FakeOpenVikingClient:
                 "query": query,
                 "target_uri": target_uri,
                 "limit": limit,
+                "mode": mode,
                 "score_threshold": score_threshold,
             }
         )
         return self.find_result
+
+    async def abstract(self, uri: str) -> str:
+        self.abstract_calls.append(uri)
+        return self.abstract_result
+
+    async def overview(self, uri: str) -> str:
+        self.overview_calls.append(uri)
+        return self.overview_result
+
+    async def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+        self.read_calls.append(uri)
+        return self.read_result
+
+    async def ls(self, uri: str) -> list[dict[str, object]]:
+        self.ls_calls.append(uri)
+        return self.ls_result
+
+    async def tree(self, uri: str) -> list[dict[str, object]]:
+        self.tree_calls.append(uri)
+        return self.tree_result
+
+    async def stat(self, uri: str) -> dict[str, object]:
+        self.stat_calls.append(uri)
+        return self.stat_result
+
+    async def add_resource(
+        self,
+        path: str,
+        reason: str = "",
+    ) -> dict[str, object]:
+        self.add_resource_calls.append({"path": path, "reason": reason})
+        return self.add_resource_result
 
     async def wait_processed(self, timeout: float | None = None) -> dict[str, object]:
         self.wait_processed_calls.append(timeout)
@@ -198,6 +248,13 @@ class FakeOpenVikingFactory:
     reset_calls: int = 0
     default_search_result: FakeFindResult = field(default_factory=FakeFindResult)
     default_find_result: FakeFindResult = field(default_factory=FakeFindResult)
+    default_abstract_result: str = "abstract"
+    default_overview_result: str = "overview"
+    default_read_result: str = "full"
+    default_ls_result: list[dict[str, object]] = field(default_factory=list)
+    default_tree_result: list[dict[str, object]] = field(default_factory=list)
+    default_stat_result: dict[str, object] = field(default_factory=dict)
+    default_add_resource_result: dict[str, object] = field(default_factory=dict)
     shared_sessions: dict[str, FakeOpenVikingSession] = field(default_factory=dict)
     shared_existing_session_ids: set[str] = field(default_factory=set)
 
@@ -206,6 +263,13 @@ class FakeOpenVikingFactory:
             path=path,
             search_result=self.default_search_result,
             find_result=self.default_find_result,
+            abstract_result=self.default_abstract_result,
+            overview_result=self.default_overview_result,
+            read_result=self.default_read_result,
+            ls_result=self.default_ls_result,
+            tree_result=self.default_tree_result,
+            stat_result=self.default_stat_result,
+            add_resource_result=self.default_add_resource_result,
             sessions=self.shared_sessions,
             existing_session_ids=self.shared_existing_session_ids,
         )
@@ -245,9 +309,7 @@ def _install_fake_runtime(monkeypatch: pytest.MonkeyPatch):
     config_singleton = FakeOpenVikingConfigSingleton()
     runtime = service_module.OpenVikingRuntime(
         async_openviking_cls=cast(service_module.OpenVikingClientFactoryProtocol, factory),
-        config_singleton=cast(
-            service_module.OpenVikingConfigSingletonProtocol, config_singleton
-        ),
+        config_singleton=cast(service_module.OpenVikingConfigSingletonProtocol, config_singleton),
     )
     monkeypatch.setattr(service_module, "_load_openviking_runtime", lambda: runtime)
     return factory, config_singleton
@@ -403,35 +465,176 @@ async def test_openviking_provider_on_pre_compress_archives_pending_messages(
     assert client.delete_session_calls == ["aeloon-live-cli_test"]
 
 
-@pytest.mark.asyncio
-async def test_openviking_provider_rejects_http_mode(
+def test_openviking_provider_exposes_tool_surface(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     from aeloon.memory.providers.openviking import OpenVikingProvider
 
     _install_fake_runtime(monkeypatch)
+    provider = OpenVikingProvider({"ovConfig": {"storage": {}}}, _make_deps(tmp_path))
+
+    assert provider.always_skill_names() == []
+    assert [tool.name for tool in provider.build_tools()] == [
+        "viking_search",
+        "viking_read",
+        "viking_browse",
+        "viking_remember",
+        "viking_add_resource",
+    ]
+    assert "viking_search" in provider.system_prompt_block()
+    assert "viking_add_resource" in provider.system_prompt_block()
+
+
+@pytest.mark.asyncio
+async def test_openviking_provider_on_memory_write_mirrors_prompt_memory_notes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from aeloon.memory.providers.openviking import OpenVikingProvider
+
+    factory, _ = _install_fake_runtime(monkeypatch)
+    provider = OpenVikingProvider({"ovConfig": {"storage": {}}}, _make_deps(tmp_path))
+
+    await provider.on_memory_write(
+        action="add",
+        target="memory",
+        content="Project prefers terse summaries.",
+        session_key="cli:test",
+    )
+
+    client = factory.clients[0]
+    live_session = client.sessions["aeloon-live-cli_test"]
+    assert live_session.messages == [("user", None)]
+    assert live_session.parts_history[0] == [
+        {
+            "type": "text",
+            "text": "[Memory note — memory] Project prefers terse summaries.",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_openviking_provider_on_session_end_commits_live_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from aeloon.memory.providers.openviking import OpenVikingProvider
+
+    factory, _ = _install_fake_runtime(monkeypatch)
+    provider = OpenVikingProvider(
+        {
+            "ovConfig": {"storage": {}},
+            "waitProcessedTimeoutS": 12.0,
+        },
+        _make_deps(tmp_path),
+    )
+    session = Session(key="cli:test")
+    session.messages = [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "world"},
+    ]
+
+    await provider.sync_turn(
+        session=session,
+        raw_new_messages=[],
+        persisted_new_messages=list(session.messages),
+        final_content="world",
+    )
+    await provider.on_session_end(
+        session=session,
+        pending_messages=list(session.messages),
+        reason="shutdown",
+    )
+
+    client = factory.clients[0]
+    assert client.commit_session_calls == ["aeloon-live-cli_test"]
+    assert client.wait_processed_calls == [12.0]
+    assert client.delete_session_calls == ["aeloon-live-cli_test"]
+
+
+@pytest.mark.asyncio
+async def test_openviking_provider_http_mode_supports_tool_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import httpx
+
+    import aeloon.memory.providers.openviking_service as service_module
+    from aeloon.memory.providers.openviking import OpenVikingProvider
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/search/find":
+            body = json.loads(request.content.decode("utf-8"))
+            assert body["mode"] == "deep"
+            return httpx.Response(
+                200,
+                json={
+                    "result": {
+                        "memories": [
+                            {
+                                "uri": "viking://memories/test",
+                                "abstract": "Search hit",
+                                "score": 0.9,
+                            }
+                        ]
+                    }
+                },
+            )
+        if request.url.path == "/api/v1/content/overview":
+            return httpx.Response(200, json={"result": "Overview text"})
+        if request.url.path == "/api/v1/fs/tree":
+            return httpx.Response(
+                200,
+                json={"result": [{"rel_path": "docs", "uri": "viking://resources/docs/"}]},
+            )
+        if request.url.path == "/api/v1/resources":
+            return httpx.Response(200, json={"result": {"root_uri": "viking://resources/test"}})
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        service_module.httpx,
+        "AsyncClient",
+        lambda **kwargs: original_async_client(
+            transport=transport,
+            base_url=kwargs["base_url"],
+            headers=kwargs.get("headers"),
+        ),
+    )
     provider = OpenVikingProvider(
         {
             "mode": "http",
-            "configPath": "/tmp/ov.conf",
-            "ovConfig": {
-                "storage": {"agfs": {"port": 1833}},
-                "embedding": {"dense": {"provider": "mock", "model": "embed", "api_key": "k"}},
-                "vlm": {"provider": "mock", "model": "vlm", "api_key": "k"},
-            },
+            "endpoint": "http://127.0.0.1:1933",
+            "apiKey": "secret",
+            "ovConfig": {"storage": {}},
         },
         _make_deps(tmp_path),
     )
 
-    with pytest.raises(RuntimeError, match="HTTP mode is not implemented"):
-        await provider.prefetch(
-            session=Session(key="cli:test"),
+    search_result = json.loads(
+        await provider.service.tool_search(
+            session_key="cli:test",
             query="hello",
-            channel="cli",
-            chat_id="direct",
-            current_role="user",
+            mode="deep",
         )
+    )
+    read_result = json.loads(
+        await provider.service.tool_read(uri="viking://resources/test", level="overview")
+    )
+    browse_result = json.loads(
+        await provider.service.tool_browse(action="tree", path="viking://resources/")
+    )
+    add_result = json.loads(
+        await provider.service.tool_add_resource(url="https://example.com/doc", reason="context")
+    )
+
+    assert search_result["results"][0]["uri"] == "viking://memories/test"
+    assert read_result["content"] == "Overview text"
+    assert browse_result["entries"][0]["uri"] == "viking://resources/docs/"
+    assert add_result["root_uri"] == "viking://resources/test"
+    await provider.shutdown()
 
 
 @pytest.mark.asyncio

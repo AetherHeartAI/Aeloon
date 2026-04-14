@@ -98,6 +98,7 @@ def test_context_builder_accepts_backend_runtime_lines(tmp_path) -> None:
     assert "MEMORY.md" not in prompt
     assert "HISTORY.md" not in prompt
 
+
 class _FakePromptLocalMemory:
     async def prepare_turn(
         self,
@@ -118,6 +119,7 @@ class _FakePromptLocalMemory:
         self,
         *,
         session: object,
+        query: str,
         raw_new_messages: list[dict[str, object]],
         persisted_new_messages: list[dict[str, object]],
         final_content: str | None,

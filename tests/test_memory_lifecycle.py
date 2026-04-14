@@ -76,6 +76,7 @@ async def test_memory_runtime_drains_background_tasks_on_close(tmp_path: Path) -
             self,
             *,
             session: object,
+            query: str,
             raw_new_messages: list[dict[str, object]],
             persisted_new_messages: list[dict[str, object]],
             final_content: str | None,
@@ -117,6 +118,7 @@ async def test_memory_runtime_drains_background_tasks_on_close(tmp_path: Path) -
 
     await runtime.after_turn(
         session=Session(key="cli:test"),
+        query="hello",
         raw_new_messages=[],
         persisted_new_messages=[],
         final_content="ok",
@@ -149,6 +151,7 @@ async def test_memory_runtime_schedules_new_session_hook(tmp_path: Path) -> None
             self,
             *,
             session: object,
+            query: str,
             raw_new_messages: list[dict[str, object]],
             persisted_new_messages: list[dict[str, object]],
             final_content: str | None,
@@ -215,6 +218,7 @@ async def test_memory_runtime_on_shutdown_flushes_before_close(tmp_path: Path) -
             self,
             *,
             session: object,
+            query: str,
             raw_new_messages: list[dict[str, object]],
             persisted_new_messages: list[dict[str, object]],
             final_content: str | None,
@@ -264,7 +268,12 @@ async def test_memory_runtime_on_shutdown_flushes_before_close(tmp_path: Path) -
         reason="gateway-shutdown",
     )
 
-    assert events == ["flush:gateway-shutdown", "archive:gateway-shutdown", "flush-close", "local-close"]
+    assert events == [
+        "flush:gateway-shutdown",
+        "archive:gateway-shutdown",
+        "flush-close",
+        "local-close",
+    ]
 
 
 @pytest.mark.asyncio
@@ -289,6 +298,7 @@ async def test_memory_runtime_finalize_session_archives_end_reason(tmp_path: Pat
             self,
             *,
             session: object,
+            query: str,
             raw_new_messages: list[dict[str, object]],
             persisted_new_messages: list[dict[str, object]],
             final_content: str | None,

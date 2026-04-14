@@ -56,6 +56,144 @@ def test_provider_manager_rejects_second_external_provider() -> None:
         manager.add_provider(ProviderB())
 
 
+def test_memory_provider_registry_builds_registered_provider(tmp_path: Path) -> None:
+    from aeloon.memory.providers.base import MemoryProvider
+    from aeloon.memory.providers.registry import MemoryProviderRegistry, MemoryProviderSpec
+
+    class FakeProvider(MemoryProvider):
+        name = "fake"
+
+        def __init__(self, config: dict[str, object], deps: MemoryRuntimeDeps):
+            self.config = config
+            self.deps = deps
+
+    registry = MemoryProviderRegistry()
+    registry.register(
+        MemoryProviderSpec(
+            name="fake",
+            provider_cls=FakeProvider,
+            description="fake provider",
+        )
+    )
+
+    provider = registry.build("fake", {"x": 1}, _make_deps(tmp_path))
+
+    assert isinstance(provider, FakeProvider)
+    assert provider.config == {"x": 1}
+
+
+def test_memory_provider_registry_rejects_unknown_provider(tmp_path: Path) -> None:
+    from aeloon.memory.providers.registry import MemoryProviderRegistry
+
+    registry = MemoryProviderRegistry()
+
+    with pytest.raises(ValueError, match="Unknown memory provider"):
+        registry.build("missing", {}, _make_deps(tmp_path))
+
+
+def test_provider_manager_returns_provider_tools() -> None:
+    from aeloon.core.agent.tools.base import Tool
+    from aeloon.memory.providers.base import MemoryProvider
+    from aeloon.memory.providers.manager import ProviderManager
+
+    class FakeTool(Tool):
+        @property
+        def name(self) -> str:
+            return "fake_tool"
+
+        @property
+        def description(self) -> str:
+            return "fake"
+
+        @property
+        def parameters(self) -> dict[str, object]:
+            return {"type": "object", "properties": {}, "required": []}
+
+        async def execute(self, **kwargs: object) -> str:
+            return "ok"
+
+    class FakeProvider(MemoryProvider):
+        name = "fake"
+
+        def build_tools(self) -> list[Tool]:
+            return [FakeTool()]
+
+    manager = ProviderManager()
+    manager.add_provider(FakeProvider())
+
+    assert [tool.name for tool in manager.tools()] == ["fake_tool"]
+
+
+@pytest.mark.asyncio
+async def test_provider_manager_forwards_queue_prefetch() -> None:
+    from aeloon.memory.providers.base import MemoryProvider
+    from aeloon.memory.providers.manager import ProviderManager
+
+    class FakeProvider(MemoryProvider):
+        name = "fake"
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def queue_prefetch(
+            self,
+            *,
+            session: object,
+            query: str,
+            channel: str | None,
+            chat_id: str | None,
+            current_role: str,
+        ) -> None:
+            self.calls.append(query)
+
+    provider = FakeProvider()
+    manager = ProviderManager()
+    manager.add_provider(provider)
+
+    await manager.queue_prefetch(
+        session=Session(key="cli:test"),
+        query="prefetch me",
+        channel="cli",
+        chat_id="direct",
+        current_role="user",
+    )
+
+    assert provider.calls == ["prefetch me"]
+
+
+@pytest.mark.asyncio
+async def test_provider_manager_forwards_session_end() -> None:
+    from aeloon.memory.providers.base import MemoryProvider
+    from aeloon.memory.providers.manager import ProviderManager
+
+    class FakeProvider(MemoryProvider):
+        name = "fake"
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[int, str | None]] = []
+
+        async def on_session_end(
+            self,
+            *,
+            session: object,
+            pending_messages: list[dict[str, object]],
+            reason: str | None = None,
+        ) -> None:
+            self.calls.append((len(pending_messages), reason))
+
+    provider = FakeProvider()
+    manager = ProviderManager()
+    manager.add_provider(provider)
+
+    await manager.on_session_end(
+        session=Session(key="cli:test"),
+        pending_messages=[{"role": "user", "content": "hello"}],
+        reason="shutdown",
+    )
+
+    assert provider.calls == [(1, "shutdown")]
+
+
 @pytest.mark.asyncio
 async def test_runtime_provider_mode_is_additive_not_replacement(
     tmp_path: Path, monkeypatch
@@ -92,6 +230,7 @@ async def test_runtime_provider_mode_is_additive_not_replacement(
     cfg = Config.model_validate(
         {
             "memory": {
+                "archive": {"enabled": False},
                 "provider": "openviking",
                 "providers": {"openviking": {"ovConfig": {"storage": {}}}},
             }

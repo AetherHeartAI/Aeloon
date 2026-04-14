@@ -40,7 +40,9 @@ class _RuntimeProvider(LLMProvider):
         return (self.estimated_tokens, "mock")
 
 
-def _make_deps(tmp_path: Path, *, estimated_tokens: int, context_window_tokens: int) -> MemoryRuntimeDeps:
+def _make_deps(
+    tmp_path: Path, *, estimated_tokens: int, context_window_tokens: int
+) -> MemoryRuntimeDeps:
     return MemoryRuntimeDeps(
         workspace=tmp_path,
         provider=_RuntimeProvider(estimated_tokens),

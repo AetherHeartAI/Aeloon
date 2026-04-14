@@ -160,10 +160,14 @@ class SessionSearchTool(Tool):
         )
         results = []
         for hit in hits:
-            conversation_text = _truncate_around_matches(_format_conversation(hit.conversation), query)
+            conversation_text = _truncate_around_matches(
+                _format_conversation(hit.conversation), query
+            )
             summary = await self._summarize_hit(hit, query, conversation_text)
             if not summary:
-                preview = conversation_text[:500] + ("\n…[truncated]" if len(conversation_text) > 500 else "")
+                preview = conversation_text[:500] + (
+                    "\n…[truncated]" if len(conversation_text) > 500 else ""
+                )
                 summary = f"[Raw preview — summarization unavailable]\n{preview}"
             results.append(
                 {
@@ -224,7 +228,11 @@ class SessionSearchTool(Tool):
             return None
         if response.finish_reason == "error":
             return None
-        return response.content.strip() if isinstance(response.content, str) and response.content.strip() else None
+        return (
+            response.content.strip()
+            if isinstance(response.content, str) and response.content.strip()
+            else None
+        )
 
     @staticmethod
     def _recent_result(session: RecentArchivedSession) -> dict[str, object]:

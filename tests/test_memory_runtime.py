@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
 import pytest
@@ -11,6 +12,9 @@ from aeloon.core.session.manager import Session, SessionManager
 from aeloon.memory.prompt_store import PromptMemoryStore
 from aeloon.memory.types import MemoryRuntimeDeps, TurnMemoryContext
 from aeloon.providers.base import LLMProvider, LLMResponse
+
+if TYPE_CHECKING:
+    from aeloon.core.agent.tools.base import Tool
 
 
 class DummyProvider(LLMProvider):
@@ -62,6 +66,7 @@ class _DummyLocalMemory:
         self,
         *,
         session: object,
+        query: str,
         raw_new_messages: list[dict[str, object]],
         persisted_new_messages: list[dict[str, object]],
         final_content: str | None,
@@ -90,8 +95,15 @@ class _DummyLocalMemory:
 
 
 class _DummyProviderManager:
+    def __init__(self) -> None:
+        self.queue_prefetch_calls: list[str] = []
+        self.session_end_calls: list[tuple[int, str | None]] = []
+
     def system_prompt_sections(self) -> list[str]:
         return ["# Provider\n\nOpenViking enabled"]
+
+    def tools(self) -> list[Tool]:
+        return []
 
     def always_skill_names(self) -> list[str]:
         return ["openviking-memory"]
@@ -117,16 +129,46 @@ class _DummyProviderManager:
     ) -> None:
         return None
 
+    async def queue_prefetch(
+        self,
+        *,
+        session: object,
+        query: str,
+        channel: str | None,
+        chat_id: str | None,
+        current_role: str,
+    ) -> None:
+        self.queue_prefetch_calls.append(query)
+
     async def on_pre_compress(
         self,
         *,
         session: object,
         pending_messages: list[dict[str, object]],
+        reason: str | None = None,
     ) -> None:
+        del reason
         return None
 
-    async def on_memory_write(self, *, action: str, target: str, content: str) -> None:
+    async def on_memory_write(
+        self,
+        *,
+        action: str,
+        target: str,
+        content: str,
+        session_key: str | None = None,
+    ) -> None:
+        del action, target, content, session_key
         return None
+
+    async def on_session_end(
+        self,
+        *,
+        session: object,
+        pending_messages: list[dict[str, object]],
+        reason: str | None = None,
+    ) -> None:
+        self.session_end_calls.append((len(pending_messages), reason))
 
     async def shutdown(self) -> None:
         return None
@@ -190,7 +232,10 @@ async def test_memory_runtime_prepare_turn_injects_prompt_memory_and_provider_re
     assert prepared.history_start_index == 2
     assert "memory" in prepared.always_skill_names
     assert "openviking-memory" in prepared.always_skill_names
-    assert any("Workspace uses concise progress updates." in section for section in prepared.system_sections)
+    assert any(
+        "Workspace uses concise progress updates." in section
+        for section in prepared.system_sections
+    )
     assert any("Provider recall" in block for block in prepared.recalled_context_blocks)
 
 
@@ -299,6 +344,7 @@ async def test_memory_runtime_after_turn_ingests_archive_before_returning(tmp_pa
 
     await runtime.after_turn(
         session=session,
+        query="hello",
         raw_new_messages=[],
         persisted_new_messages=[],
         final_content="ok",
@@ -306,6 +352,32 @@ async def test_memory_runtime_after_turn_ingests_archive_before_returning(tmp_pa
 
     assert archive.ingested_session_ids == [session.archive_session_id]
     await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_runtime_after_turn_queues_provider_prefetch(tmp_path: Path) -> None:
+    from aeloon.memory.runtime import MemoryRuntime
+
+    provider_manager = _DummyProviderManager()
+    runtime = MemoryRuntime(
+        memory_config=Config().memory,
+        deps=_make_deps(tmp_path),
+        local_memory=_DummyLocalMemory(),
+        session_archive=_DummyArchiveService(),
+        provider_manager=provider_manager,
+    )
+
+    await runtime.after_turn(
+        session=Session(key="cli:test"),
+        query="what did we do before",
+        raw_new_messages=[],
+        persisted_new_messages=[],
+        final_content="ok",
+    )
+
+    await runtime.close()
+
+    assert provider_manager.queue_prefetch_calls == ["what did we do before"]
 
 
 @pytest.mark.asyncio
@@ -328,6 +400,15 @@ async def test_memory_runtime_on_shutdown_flushes_then_closes_components(tmp_pat
             events.append("flush-close")
 
     class DummyProviderManager(_DummyProviderManager):
+        async def on_session_end(
+            self,
+            *,
+            session: object,
+            pending_messages: list[dict[str, object]],
+            reason: str | None = None,
+        ) -> None:
+            events.append(f"provider-session-end:{reason}")
+
         async def shutdown(self) -> None:
             events.append("provider-shutdown")
 
@@ -352,6 +433,7 @@ async def test_memory_runtime_on_shutdown_flushes_then_closes_components(tmp_pat
 
     assert events == [
         "flush:shutdown",
+        "provider-session-end:shutdown",
         "provider-shutdown",
         "flush-close",
         "local-close",
@@ -424,7 +506,7 @@ def test_agent_loop_uses_memory_runtime_with_local_memory(tmp_path: Path) -> Non
 
     assert isinstance(loop.memory, MemoryRuntime)
     assert loop.memory.local_memory is not None
-    assert not hasattr(loop, "memory_" "consolidator")
+    assert not hasattr(loop, "memory_consolidator")
 
 
 def test_memory_public_api_exports_backendless_symbols() -> None:

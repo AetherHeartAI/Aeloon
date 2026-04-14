@@ -162,7 +162,6 @@ def build_bottom_toolbar(
     cli_chat_id: str,
 ) -> Callable[[], FormattedText]:
     """Build a prompt_toolkit bottom toolbar showing model/context usage."""
-
     from aeloon.core.agent.channel_auth import GatewayManager
 
     def _toolbar() -> FormattedText:
@@ -180,7 +179,10 @@ def build_bottom_toolbar(
         available_model = max(8, width - reserved)
         if len(model_value) > available_model:
             model_value = f"{model_value[: max(1, available_model - 1)]}…"
-        spacing = max(3, width - len("Model: ") - len(model_value) - len(context_text))
+        spacing = max(
+            3,
+            width - len("Model: ") - len(model_value) - len(context_text),
+        )
         context_style = "bold ansired" if ratio >= 90 else "ansiyellow" if ratio >= 75 else ""
         return FormattedText(
             [

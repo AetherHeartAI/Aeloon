@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from aeloon.core.config.schema import MemoryConfig
 from aeloon.memory.providers.base import MemoryProvider
+from aeloon.memory.providers.registry import MEMORY_PROVIDER_REGISTRY
 from aeloon.memory.types import MemoryRuntimeDeps, MessagePayload
+
+if TYPE_CHECKING:
+    from aeloon.core.agent.tools.base import Tool
 
 
 class ProviderManager:
@@ -36,17 +42,18 @@ class ProviderManager:
         config: dict[str, object],
         deps: MemoryRuntimeDeps,
     ) -> MemoryProvider:
-        if name == "openviking":
-            from aeloon.memory.providers.openviking import OpenVikingProvider
-
-            return OpenVikingProvider(config, deps)
-        raise ValueError(f"Unknown memory provider: {name}")
+        return MEMORY_PROVIDER_REGISTRY.build(name, config, deps)
 
     def system_prompt_sections(self) -> list[str]:
         if self._provider is None:
             return []
         block = self._provider.system_prompt_block()
         return [block] if block else []
+
+    def tools(self) -> list["Tool"]:
+        if self._provider is None:
+            return []
+        return self._provider.build_tools()
 
     def always_skill_names(self) -> list[str]:
         if self._provider is None:
@@ -65,6 +72,25 @@ class ProviderManager:
         if self._provider is None:
             return ""
         return await self._provider.prefetch(
+            session=session,
+            query=query,
+            channel=channel,
+            chat_id=chat_id,
+            current_role=current_role,
+        )
+
+    async def queue_prefetch(
+        self,
+        *,
+        session: object,
+        query: str,
+        channel: str | None,
+        chat_id: str | None,
+        current_role: str,
+    ) -> None:
+        if self._provider is None:
+            return
+        await self._provider.queue_prefetch(
             session=session,
             query=query,
             channel=channel,
@@ -94,15 +120,47 @@ class ProviderManager:
         *,
         session: object,
         pending_messages: list[MessagePayload],
+        reason: str | None = None,
     ) -> None:
         if self._provider is None:
             return
-        await self._provider.on_pre_compress(session=session, pending_messages=pending_messages)
+        await self._provider.on_pre_compress(
+            session=session,
+            pending_messages=pending_messages,
+            reason=reason,
+        )
 
-    async def on_memory_write(self, *, action: str, target: str, content: str) -> None:
+    async def on_memory_write(
+        self,
+        *,
+        action: str,
+        target: str,
+        content: str,
+        session_key: str | None = None,
+    ) -> None:
         if self._provider is None:
             return
-        await self._provider.on_memory_write(action=action, target=target, content=content)
+        await self._provider.on_memory_write(
+            action=action,
+            target=target,
+            content=content,
+            session_key=session_key,
+        )
+
+    async def on_session_end(
+        self,
+        *,
+        session: object,
+        pending_messages: list[MessagePayload],
+        reason: str | None = None,
+    ) -> None:
+        if self._provider is None:
+            return
+        await self._provider.on_session_end(
+            session=session,
+            pending_messages=pending_messages,
+            reason=reason,
+        )
 
     async def shutdown(self) -> None:
         if self._provider is None:

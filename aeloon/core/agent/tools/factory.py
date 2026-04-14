@@ -84,3 +84,6 @@ def register_core_tools(
                 model=model,
             )
         )
+    if provider_manager is not None:
+        for tool in provider_manager.tools():
+            registry.register(tool)

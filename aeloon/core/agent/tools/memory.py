@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable
-from typing import Literal, cast
+from inspect import Parameter, signature
+from typing import TYPE_CHECKING, Literal, cast
 
 from aeloon.core.agent.tools.base import Tool
 from aeloon.memory.prompt_store import MemoryTarget, PromptMemoryStore
+
+if TYPE_CHECKING:
+    from aeloon.core.agent.turn import TurnContext
 
 
 class MemoryTool(Tool):
@@ -20,6 +24,8 @@ class MemoryTool(Tool):
     ):
         self.store = store
         self._on_write = on_write
+        self._session_key = ""
+        self._on_write_accepts_session_key = self._accepts_session_key(on_write)
 
     @property
     def name(self) -> str:
@@ -64,6 +70,9 @@ class MemoryTool(Tool):
     def concurrency_mode(self) -> Literal["mutating"]:
         return "mutating"
 
+    def on_turn_start(self, ctx: "TurnContext") -> None:
+        self._session_key = ctx.session_key or f"{ctx.channel}:{ctx.chat_id}"
+
     async def execute(self, **kwargs: object) -> str:
         action = str(kwargs.get("action", ""))
         target = str(kwargs.get("target", ""))
@@ -88,5 +97,25 @@ class MemoryTool(Tool):
             and self._on_write is not None
             and action in {"add", "replace"}
         ):
-            await self._on_write(action=action, target=target, content=str(content or ""))
+            payload: dict[str, object] = {
+                "action": action,
+                "target": target,
+                "content": str(content or ""),
+            }
+            if self._on_write_accepts_session_key and self._session_key:
+                payload["session_key"] = self._session_key
+            await self._on_write(**payload)
         return json.dumps(result, ensure_ascii=False)
+
+    @staticmethod
+    def _accepts_session_key(
+        callback: Callable[..., Awaitable[None]] | None,
+    ) -> bool:
+        if callback is None:
+            return False
+        for parameter in signature(callback).parameters.values():
+            if parameter.kind == Parameter.VAR_KEYWORD:
+                return True
+            if parameter.name == "session_key":
+                return True
+        return False

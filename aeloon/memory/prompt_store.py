@@ -130,8 +130,7 @@ class PromptMemoryStore:
                 unique_texts = {entry for _, entry in matches}
                 if len(unique_texts) > 1:
                     previews = [
-                        entry[:80] + ("..." if len(entry) > 80 else "")
-                        for _, entry in matches
+                        entry[:80] + ("..." if len(entry) > 80 else "") for _, entry in matches
                     ]
                     return {
                         "success": False,
@@ -173,8 +172,7 @@ class PromptMemoryStore:
                 unique_texts = {entry for _, entry in matches}
                 if len(unique_texts) > 1:
                     previews = [
-                        entry[:80] + ("..." if len(entry) > 80 else "")
-                        for _, entry in matches
+                        entry[:80] + ("..." if len(entry) > 80 else "") for _, entry in matches
                     ]
                     return {
                         "success": False,

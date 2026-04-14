@@ -125,7 +125,9 @@ def test_prompt_memory_store_remove_rejects_multiple_distinct_matches(tmp_path: 
     assert "matches" in payload
 
 
-def test_prompt_memory_store_success_response_includes_count_and_percent_usage(tmp_path: Path) -> None:
+def test_prompt_memory_store_success_response_includes_count_and_percent_usage(
+    tmp_path: Path,
+) -> None:
     from aeloon.memory.prompt_store import PromptMemoryStore
 
     _write_memory_files(tmp_path)
@@ -139,7 +141,9 @@ def test_prompt_memory_store_success_response_includes_count_and_percent_usage(t
     assert "chars" in str(payload["usage"])
 
 
-def test_prompt_memory_store_loads_existing_oversized_file_without_truncation(tmp_path: Path) -> None:
+def test_prompt_memory_store_loads_existing_oversized_file_without_truncation(
+    tmp_path: Path,
+) -> None:
     from aeloon.memory.prompt_store import PromptMemoryStore
 
     oversized = "very long existing memory entry"
@@ -152,7 +156,9 @@ def test_prompt_memory_store_loads_existing_oversized_file_without_truncation(tm
     assert store.over_limit_status()["memory"] == (len(oversized), 10)
 
 
-def test_prompt_memory_store_blocks_new_writes_when_file_is_already_oversized(tmp_path: Path) -> None:
+def test_prompt_memory_store_blocks_new_writes_when_file_is_already_oversized(
+    tmp_path: Path,
+) -> None:
     from aeloon.memory.prompt_store import PromptMemoryStore
 
     oversized = "very long existing memory entry"

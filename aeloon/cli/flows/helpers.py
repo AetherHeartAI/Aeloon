@@ -80,4 +80,60 @@ async def boot_plugins(agent_loop: Any, config: Config, *, quiet: bool = False) 
         from aeloon.plugins._sdk.config_hooks import ConfigHookAdapter
 
         ConfigHookAdapter(registry).load_from_config(config.hooks)
+
+    # Inject plugin catalog into agent system prompt
+    catalog = build_plugin_catalog(registry)
+    if catalog:
+        agent_loop.context.set_plugin_catalog(catalog)
+
     return manager
+
+
+def build_plugin_catalog(registry: Any) -> str:
+    """Build a textual plugin catalog for the agent system prompt."""
+    lines: list[str] = []
+    for pid, record in registry.plugins.items():
+        if record.status not in ("registered", "active"):
+            continue
+        manifest = record.manifest
+        name = manifest.name or pid
+        desc = manifest.description or ""
+        header = f"## {name}"
+        if desc:
+            header += f"\n{desc}"
+        lines.append(header)
+
+        # CLI commands
+        cli_rec = (
+            registry.cli_registrars.get(manifest.provides.commands[0])
+            if manifest.provides.commands
+            else None
+        )
+        if cli_rec and cli_rec.commands:
+            lines.append("Commands:")
+            for cmd_spec in cli_rec.commands:
+                help_text = getattr(cmd_spec, "help", "") or ""
+                lines.append(f"  /{cmd_spec.group_name} {cmd_spec.command_name} — {help_text}")
+
+        # Tools
+        plugin_tools = [t for t in registry.tools.values() if t.plugin_id == pid]
+        if plugin_tools:
+            lines.append("Tools:")
+            for t in plugin_tools:
+                tool_desc = getattr(t.tool, "description", "") or ""
+                lines.append(f"  {t.name} — {tool_desc}")
+
+        # Services
+        plugin_services = [s for s in registry.services.values() if s.plugin_id == pid]
+        if plugin_services:
+            svc_names = ", ".join(s.name for s in plugin_services)
+            lines.append(f"Services: {svc_names}")
+
+        lines.append("")
+
+    if not lines:
+        return ""
+    return (
+        "# Plugins\n\nThe following plugins are loaded and available. "
+        "Tell the user about relevant plugins when asked about capabilities.\n\n" + "\n".join(lines)
+    )

@@ -6,6 +6,8 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from aeloon.cli.commands import app
+from aeloon.memory.providers.base import MemoryProvider
+from aeloon.memory.providers.registry import MemoryProviderRegistry, MemoryProviderSpec
 
 runner = CliRunner()
 
@@ -162,3 +164,91 @@ def test_memory_off_disables_provider(tmp_path: Path) -> None:
     assert saved["memory"]["providers"]["openviking"]["searchMode"] == "search"
     assert "backend" not in saved["memory"]
     assert "backends" not in saved["memory"]
+
+
+def test_memory_setup_uses_provider_prepare_hook(tmp_path: Path, monkeypatch) -> None:
+    class FakeProvider(MemoryProvider):
+        name = "fake"
+
+        @classmethod
+        def config_schema(cls) -> list[dict[str, object]]:
+            return [
+                {
+                    "key": "token",
+                    "description": "Provider token",
+                    "default": "abc",
+                }
+            ]
+
+        @classmethod
+        def prepare_setup_values(
+            cls,
+            values: dict[str, object],
+        ) -> tuple[dict[str, object], list[str]]:
+            prepared = dict(values)
+            prepared["prepared"] = True
+            return prepared, ["Prepared by fake provider"]
+
+    registry = MemoryProviderRegistry()
+    registry.register(
+        MemoryProviderSpec(
+            name=FakeProvider.name,
+            provider_cls=FakeProvider,
+            description="fake provider",
+        )
+    )
+    monkeypatch.setattr("aeloon.cli.memory.MEMORY_PROVIDER_REGISTRY", registry)
+
+    config_path = tmp_path / "config.json"
+    result = runner.invoke(
+        app,
+        ["memory", "setup", "fake", "--config", str(config_path)],
+        input="hello\n",
+    )
+
+    assert result.exit_code == 0
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["memory"]["provider"] == "fake"
+    assert saved["memory"]["providers"]["fake"] == {
+        "token": "hello",
+        "prepared": True,
+    }
+    assert "Prepared by fake provider" in result.stdout
+
+
+def test_memory_status_uses_provider_status_lines(tmp_path: Path, monkeypatch) -> None:
+    class FakeProvider(MemoryProvider):
+        name = "fake"
+
+        @classmethod
+        def status_lines(cls, config: dict[str, object]) -> list[str]:
+            return [f"Mode: {config.get('mode', 'missing')}"]
+
+    registry = MemoryProviderRegistry()
+    registry.register(
+        MemoryProviderSpec(
+            name=FakeProvider.name,
+            provider_cls=FakeProvider,
+            description="fake provider",
+        )
+    )
+    monkeypatch.setattr("aeloon.cli.memory.MEMORY_PROVIDER_REGISTRY", registry)
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "memory": {
+                    "provider": "fake",
+                    "providers": {"fake": {"mode": "custom"}},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["memory", "status", "--config", str(config_path)])
+
+    assert result.exit_code == 0
+    assert "Provider: fake" in result.stdout
+    assert "Mode: custom" in result.stdout

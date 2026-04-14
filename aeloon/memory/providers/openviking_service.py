@@ -13,7 +13,7 @@ from hashlib import sha1
 from pathlib import Path
 from typing import Protocol, TypedDict, cast
 
-from loguru import logger
+import httpx
 from pydantic import BaseModel, Field, field_validator
 
 from aeloon.core.config.paths import get_logs_dir
@@ -84,6 +84,80 @@ class OpenVikingClientProtocol(Protocol):
         filter: dict[str, object] | None = None,
         telemetry: bool = False,
     ) -> object: ...
+
+    async def abstract(self, uri: str) -> str: ...
+
+    async def overview(self, uri: str) -> str: ...
+
+    async def read(self, uri: str, offset: int = 0, limit: int = -1) -> str: ...
+
+    async def ls(self, uri: str) -> list[object]: ...
+
+    async def tree(self, uri: str) -> list[object]: ...
+
+    async def stat(self, uri: str) -> dict[str, object]: ...
+
+    async def add_resource(
+        self,
+        path: str,
+        reason: str = "",
+    ) -> dict[str, object]: ...
+
+    async def wait_processed(self, timeout: float | None = None) -> dict[str, object]: ...
+
+
+class OpenVikingTransportProtocol(Protocol):
+    async def initialize(self) -> None: ...
+
+    async def close(self) -> None: ...
+
+    async def ensure_session(self, session_id: str) -> None: ...
+
+    async def session_exists(self, session_id: str) -> bool: ...
+
+    async def add_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str | None = None,
+        parts: list[dict[str, object]] | None = None,
+    ) -> dict[str, object]: ...
+
+    async def commit_session(self, session_id: str) -> dict[str, object]: ...
+
+    async def delete_session(self, session_id: str) -> None: ...
+
+    async def search(
+        self,
+        query: str,
+        target_uri: str = "",
+        session_id: str | None = None,
+        limit: int = 10,
+        score_threshold: float | None = None,
+    ) -> object: ...
+
+    async def find(
+        self,
+        query: str,
+        target_uri: str = "",
+        limit: int = 10,
+        score_threshold: float | None = None,
+        mode: str = "auto",
+    ) -> object: ...
+
+    async def abstract(self, uri: str) -> str: ...
+
+    async def overview(self, uri: str) -> str: ...
+
+    async def read(self, uri: str) -> str: ...
+
+    async def ls(self, uri: str) -> list[object]: ...
+
+    async def tree(self, uri: str) -> list[object]: ...
+
+    async def stat(self, uri: str) -> dict[str, object]: ...
+
+    async def add_resource(self, path: str, reason: str = "") -> dict[str, object]: ...
 
     async def wait_processed(self, timeout: float | None = None) -> dict[str, object]: ...
 
@@ -172,7 +246,342 @@ def _default_ov_config() -> dict[str, object]:
     return {"storage": {}}
 
 
+def _prepare_inline_config(
+    config: "OpenVikingProviderConfig",
+    storage_root: Path,
+) -> dict[str, object]:
+    inline = copy.deepcopy(config.ov_config)
+    raw_storage = inline.get("storage")
+    storage = dict(raw_storage) if isinstance(raw_storage, Mapping) else {}
+    storage["workspace"] = str(storage_root)
+    inline["storage"] = storage
+    if "log" not in inline:
+        inline["log"] = {
+            "level": "WARNING",
+            "output": str(get_logs_dir() / "openviking.log"),
+        }
+    return inline
+
+
+class EmbeddedOpenVikingTransport:
+    def __init__(
+        self,
+        *,
+        config: "OpenVikingProviderConfig",
+        storage_root: Path,
+    ) -> None:
+        self.config = config
+        self.storage_root = storage_root
+        self.runtime: OpenVikingRuntime | None = None
+        self._client: OpenVikingClientProtocol | None = None
+        self._client_init_lock = asyncio.Lock()
+
+    async def initialize(self) -> None:
+        await self._ensure_client()
+
+    async def _ensure_client(self) -> OpenVikingClientProtocol:
+        if self._client is not None:
+            return self._client
+
+        async with self._client_init_lock:
+            if self._client is not None:
+                return self._client
+            self.runtime = _load_openviking_runtime()
+            inline_config = _prepare_inline_config(self.config, self.storage_root)
+            self.storage_root.mkdir(parents=True, exist_ok=True)
+            self.runtime.config_singleton.initialize(
+                config_dict=inline_config,
+                config_path=self.config.config_path,
+            )
+            client = self.runtime.async_openviking_cls(path=str(self.storage_root))
+            await client.initialize()
+            self._client = client
+            return client
+
+    async def close(self) -> None:
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
+        if self.runtime is not None:
+            self.runtime.config_singleton.reset_instance()
+            await self.runtime.async_openviking_cls.reset()
+            self.runtime = None
+
+    async def ensure_session(self, session_id: str) -> None:
+        client = await self._ensure_client()
+        if await client.session_exists(session_id):
+            return
+        session = client.session(session_id=session_id)
+        await session.ensure_exists()
+
+    async def session_exists(self, session_id: str) -> bool:
+        client = await self._ensure_client()
+        return await client.session_exists(session_id)
+
+    async def add_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str | None = None,
+        parts: list[dict[str, object]] | None = None,
+    ) -> dict[str, object]:
+        client = await self._ensure_client()
+        return await client.add_message(
+            session_id=session_id,
+            role=role,
+            content=content,
+            parts=parts,
+        )
+
+    async def commit_session(self, session_id: str) -> dict[str, object]:
+        client = await self._ensure_client()
+        return await client.commit_session(session_id)
+
+    async def delete_session(self, session_id: str) -> None:
+        client = await self._ensure_client()
+        await client.delete_session(session_id)
+
+    async def search(
+        self,
+        query: str,
+        target_uri: str = "",
+        session_id: str | None = None,
+        limit: int = 10,
+        score_threshold: float | None = None,
+    ) -> object:
+        client = await self._ensure_client()
+        return await client.search(
+            query=query,
+            target_uri=target_uri,
+            session_id=session_id,
+            limit=limit,
+            score_threshold=score_threshold,
+        )
+
+    async def find(
+        self,
+        query: str,
+        target_uri: str = "",
+        limit: int = 10,
+        score_threshold: float | None = None,
+        mode: str = "auto",
+    ) -> object:
+        del mode
+        client = await self._ensure_client()
+        return await client.find(
+            query=query,
+            target_uri=target_uri,
+            limit=limit,
+            score_threshold=score_threshold,
+        )
+
+    async def abstract(self, uri: str) -> str:
+        client = await self._ensure_client()
+        return await client.abstract(uri)
+
+    async def overview(self, uri: str) -> str:
+        client = await self._ensure_client()
+        return await client.overview(uri)
+
+    async def read(self, uri: str) -> str:
+        client = await self._ensure_client()
+        return await client.read(uri)
+
+    async def ls(self, uri: str) -> list[object]:
+        client = await self._ensure_client()
+        return await client.ls(uri)
+
+    async def tree(self, uri: str) -> list[object]:
+        client = await self._ensure_client()
+        return await client.tree(uri)
+
+    async def stat(self, uri: str) -> dict[str, object]:
+        client = await self._ensure_client()
+        return await client.stat(uri)
+
+    async def add_resource(self, path: str, reason: str = "") -> dict[str, object]:
+        client = await self._ensure_client()
+        return await client.add_resource(path=path, reason=reason)
+
+    async def wait_processed(self, timeout: float | None = None) -> dict[str, object]:
+        client = await self._ensure_client()
+        return await client.wait_processed(timeout=timeout)
+
+
+class HttpOpenVikingTransport:
+    def __init__(
+        self,
+        *,
+        endpoint: str,
+        api_key: str,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self.endpoint = endpoint.rstrip("/")
+        self.api_key = api_key
+        self._client = client
+        self._owns_client = client is None
+
+    async def initialize(self) -> None:
+        await self._ensure_client()
+
+    async def _ensure_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            headers = {"Accept": "application/json"}
+            if self.api_key:
+                headers["X-API-Key"] = self.api_key
+            self._client = httpx.AsyncClient(base_url=self.endpoint, headers=headers)
+        return self._client
+
+    async def close(self) -> None:
+        if self._client is not None and self._owns_client:
+            await self._client.aclose()
+        self._client = None
+
+    @staticmethod
+    def _unwrap(response: httpx.Response) -> object:
+        response.raise_for_status()
+        if not response.content:
+            return {}
+        payload = response.json()
+        if isinstance(payload, dict):
+            status = payload.get("status")
+            if status == "error":
+                error = payload.get("error")
+                if isinstance(error, Mapping):
+                    message = error.get("message")
+                    if isinstance(message, str) and message:
+                        raise RuntimeError(message)
+                raise RuntimeError("OpenViking request failed")
+            if "result" in payload:
+                return payload["result"]
+        return payload
+
+    async def _get(
+        self,
+        path: str,
+        params: dict[str, str | int | float | bool | None],
+    ) -> object:
+        client = await self._ensure_client()
+        response = await client.get(path, params=params)
+        return self._unwrap(response)
+
+    async def _post(self, path: str, payload: dict[str, object]) -> object:
+        client = await self._ensure_client()
+        response = await client.post(path, json=payload)
+        return self._unwrap(response)
+
+    async def _delete(self, path: str) -> None:
+        client = await self._ensure_client()
+        response = await client.delete(path)
+        self._unwrap(response)
+
+    async def ensure_session(self, session_id: str) -> None:
+        del session_id
+        return None
+
+    async def session_exists(self, session_id: str) -> bool:
+        client = await self._ensure_client()
+        response = await client.get(f"/api/v1/sessions/{session_id}")
+        return response.status_code == 200
+
+    async def add_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str | None = None,
+        parts: list[dict[str, object]] | None = None,
+    ) -> dict[str, object]:
+        payload: dict[str, object] = {"role": role}
+        if parts is not None:
+            payload["parts"] = parts
+        elif content is not None:
+            payload["content"] = content
+        result = await self._post(f"/api/v1/sessions/{session_id}/messages", payload)
+        return result if isinstance(result, dict) else {}
+
+    async def commit_session(self, session_id: str) -> dict[str, object]:
+        result = await self._post(f"/api/v1/sessions/{session_id}/commit", {"telemetry": False})
+        return result if isinstance(result, dict) else {}
+
+    async def delete_session(self, session_id: str) -> None:
+        await self._delete(f"/api/v1/sessions/{session_id}")
+
+    async def search(
+        self,
+        query: str,
+        target_uri: str = "",
+        session_id: str | None = None,
+        limit: int = 10,
+        score_threshold: float | None = None,
+    ) -> object:
+        payload: dict[str, object] = {
+            "query": query,
+            "target_uri": target_uri,
+            "session_id": session_id,
+            "limit": limit,
+            "score_threshold": score_threshold,
+        }
+        return await self._post("/api/v1/search/search", payload)
+
+    async def find(
+        self,
+        query: str,
+        target_uri: str = "",
+        limit: int = 10,
+        score_threshold: float | None = None,
+        mode: str = "auto",
+    ) -> object:
+        payload: dict[str, object] = {
+            "query": query,
+            "target_uri": target_uri,
+            "limit": limit,
+            "score_threshold": score_threshold,
+        }
+        if mode != "auto":
+            payload["mode"] = mode
+        return await self._post("/api/v1/search/find", payload)
+
+    async def abstract(self, uri: str) -> str:
+        result = await self._get("/api/v1/content/abstract", {"uri": uri})
+        return result if isinstance(result, str) else str(result)
+
+    async def overview(self, uri: str) -> str:
+        result = await self._get("/api/v1/content/overview", {"uri": uri})
+        return result if isinstance(result, str) else str(result)
+
+    async def read(self, uri: str) -> str:
+        result = await self._get("/api/v1/content/read", {"uri": uri})
+        return result if isinstance(result, str) else str(result)
+
+    async def ls(self, uri: str) -> list[object]:
+        result = await self._get("/api/v1/fs/ls", {"uri": uri})
+        return result if isinstance(result, list) else []
+
+    async def tree(self, uri: str) -> list[object]:
+        result = await self._get("/api/v1/fs/tree", {"uri": uri})
+        return result if isinstance(result, list) else []
+
+    async def stat(self, uri: str) -> dict[str, object]:
+        result = await self._get("/api/v1/fs/stat", {"uri": uri})
+        return result if isinstance(result, dict) else {}
+
+    async def add_resource(self, path: str, reason: str = "") -> dict[str, object]:
+        payload: dict[str, object] = {"path": path}
+        if reason:
+            payload["reason"] = reason
+        result = await self._post("/api/v1/resources", payload)
+        return result if isinstance(result, dict) else {}
+
+    async def wait_processed(self, timeout: float | None = None) -> dict[str, object]:
+        result = await self._post("/api/v1/system/wait", {"timeout": timeout})
+        return result if isinstance(result, dict) else {}
+
+
 class OpenVikingProviderConfig(BaseModel):
+    model_config = {"populate_by_name": True}
+
+    endpoint: str = Field(default="http://127.0.0.1:1933", alias="endpoint")
+    api_key: str = Field(default="", alias="apiKey")
     mode: str = Field(default="embedded", alias="mode")
     config_path: str | None = Field(default=None, alias="configPath")
     storage_subdir: str = Field(default="openviking_memory", alias="storageSubdir")
@@ -195,6 +604,15 @@ class OpenVikingProviderConfig(BaseModel):
         if mode not in {"embedded", "http"}:
             raise ValueError("mode must be either 'embedded' or 'http'")
         return mode
+
+    @field_validator("endpoint", "api_key", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: object) -> str:
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            raise ValueError("endpoint/apiKey must be strings")
+        return value.strip()
 
     @field_validator("config_path", mode="before")
     @classmethod
@@ -264,49 +682,37 @@ class OpenVikingService:
     def __init__(self, config: OpenVikingProviderConfig, deps: MemoryRuntimeDeps) -> None:
         self.config = config
         self.deps = deps
-        self.runtime = _load_openviking_runtime()
         self.storage_root = deps.workspace / "memory" / config.storage_subdir
         self.sessions = deps.sessions
-        self._client: OpenVikingClientProtocol | None = None
-        self._client_init_lock = asyncio.Lock()
+        self._transport: OpenVikingTransportProtocol | None = None
+        self._transport_init_lock = asyncio.Lock()
         self._locks: dict[str, asyncio.Lock] = {}
 
     def _get_lock(self, session_key: str) -> asyncio.Lock:
         return self._locks.setdefault(session_key, asyncio.Lock())
 
-    def _prepare_inline_config(self) -> dict[str, object]:
-        inline = copy.deepcopy(self.config.ov_config)
-        raw_storage = inline.get("storage")
-        storage = dict(raw_storage) if isinstance(raw_storage, Mapping) else {}
-        storage["workspace"] = str(self.storage_root)
-        inline["storage"] = storage
-        if "log" not in inline:
-            inline["log"] = {
-                "level": "WARNING",
-                "output": str(get_logs_dir() / "openviking.log"),
-            }
-        return inline
+    def _build_transport(self) -> OpenVikingTransportProtocol:
+        if self.config.mode == "http":
+            return HttpOpenVikingTransport(
+                endpoint=self.config.endpoint,
+                api_key=self.config.api_key,
+            )
+        return EmbeddedOpenVikingTransport(
+            config=self.config,
+            storage_root=self.storage_root,
+        )
 
-    async def _ensure_client(self) -> OpenVikingClientProtocol:
-        if self._client is not None:
-            return self._client
+    async def _ensure_transport(self) -> OpenVikingTransportProtocol:
+        if self._transport is not None:
+            return self._transport
 
-        async with self._client_init_lock:
-            if self._client is not None:
-                return self._client
-            if self.config.mode == "http":
-                raise RuntimeError(
-                    "OpenViking HTTP mode is not implemented in Aeloon yet. "
-                    "Use mode='embedded' for now."
-                )
-
-            inline_config = self._prepare_inline_config()
-            self.storage_root.mkdir(parents=True, exist_ok=True)
-            self.runtime.config_singleton.initialize(config_dict=inline_config)
-            client = self.runtime.async_openviking_cls(path=str(self.storage_root))
-            await client.initialize()
-            self._client = client
-            return client
+        async with self._transport_init_lock:
+            if self._transport is not None:
+                return self._transport
+            transport = self._build_transport()
+            await transport.initialize()
+            self._transport = transport
+            return transport
 
     def _live_session_id(self, session_key: str) -> str:
         return f"aeloon-live-{session_key.replace(':', '_')}"
@@ -370,13 +776,10 @@ class OpenVikingService:
 
     async def _ensure_session_exists(
         self,
-        client: OpenVikingClientProtocol,
+        transport: OpenVikingTransportProtocol,
         session_id: str,
     ) -> None:
-        if await client.session_exists(session_id):
-            return
-        session = client.session(session_id=session_id)
-        await session.ensure_exists()
+        await transport.ensure_session(session_id)
 
     def _recall_targets(self) -> list[str]:
         unique: list[str] = []
@@ -394,14 +797,14 @@ class OpenVikingService:
     async def _recall_one(
         self,
         *,
-        client: OpenVikingClientProtocol,
+        transport: OpenVikingTransportProtocol,
         query: str,
         target_uri: str,
         session_id: str | None,
     ) -> object:
         if self.config.search_mode == "find":
             return await asyncio.wait_for(
-                client.find(
+                transport.find(
                     query=query,
                     target_uri=target_uri,
                     limit=self.config.search_limit,
@@ -410,7 +813,7 @@ class OpenVikingService:
                 timeout=self.config.recall_timeout_s,
             )
         return await asyncio.wait_for(
-            client.search(
+            transport.search(
                 query=query,
                 target_uri=target_uri,
                 session_id=session_id,
@@ -590,22 +993,258 @@ class OpenVikingService:
 
     async def _replace_session_messages(
         self,
-        client: OpenVikingClientProtocol,
+        transport: OpenVikingTransportProtocol,
         session_id: str,
         messages: list[MessagePayload],
     ) -> None:
-        if await client.session_exists(session_id):
-            await client.delete_session(session_id)
-        await self._ensure_session_exists(client, session_id)
+        if await transport.session_exists(session_id):
+            await transport.delete_session(session_id)
+        await self._ensure_session_exists(transport, session_id)
         for message in messages:
             transcript = self._transcript_message(message)
             if transcript is None:
                 continue
-            await client.add_message(
+            await transport.add_message(
                 session_id=session_id,
                 role=transcript[0],
                 content=transcript[1],
             )
+
+    def _format_tool_search_result(self, result: object) -> dict[str, object]:
+        formatted: list[dict[str, object]] = []
+        for bucket_name in ("memories", "resources", "skills"):
+            for item in self._result_contexts(result, bucket_name):
+                entry: dict[str, object] = {
+                    "uri": self._value(item, "uri") or "",
+                    "type": bucket_name.rstrip("s"),
+                    "abstract": self._value(item, "abstract") or "",
+                }
+                score = self._context_score(item)
+                if score is not None:
+                    entry["score"] = round(score, 3)
+                relations = self._value(item, "relations")
+                if isinstance(relations, list):
+                    related = [
+                        relation_uri
+                        for relation in relations[:3]
+                        if isinstance(relation, Mapping)
+                        and isinstance((relation_uri := relation.get("uri")), str)
+                    ]
+                    if related:
+                        entry["related"] = related
+                formatted.append(entry)
+        total = self._value(result, "total")
+        return {
+            "results": formatted,
+            "total": total if isinstance(total, int) else len(formatted),
+        }
+
+    async def _append_live_message(
+        self,
+        *,
+        session_key: str,
+        role: str,
+        content: str | None = None,
+        parts: list[dict[str, object]] | None = None,
+    ) -> None:
+        transport = await self._ensure_transport()
+        session = self.sessions.get_or_create(session_key)
+        state = self._read_state(session)
+        live_session_id = state["liveSessionId"]
+        await self._ensure_session_exists(transport, live_session_id)
+        await transport.add_message(
+            session_id=live_session_id,
+            role=role,
+            content=content,
+            parts=parts,
+        )
+        self._persist_state(session, state)
+
+    @staticmethod
+    def _read_result_content(result: object) -> str:
+        if isinstance(result, str):
+            return result
+        if isinstance(result, Mapping):
+            content = result.get("content")
+            if isinstance(content, str):
+                return content
+        return str(result)
+
+    @staticmethod
+    def _extract_root_uri(result: object) -> str:
+        if isinstance(result, Mapping):
+            for key in ("root_uri", "uri", "resource_uri"):
+                value = result.get(key)
+                if isinstance(value, str) and value:
+                    return value
+        return ""
+
+    async def queue_prefetch(self, *, session: object, query: str) -> None:
+        if not query.strip():
+            return
+        await self._recall(session, query)
+
+    async def tool_search(
+        self,
+        *,
+        session_key: str,
+        query: str,
+        mode: str = "auto",
+        scope: str = "",
+        limit: int = 10,
+    ) -> str:
+        del session_key
+        transport = await self._ensure_transport()
+        result = await transport.find(
+            query=query,
+            target_uri=scope,
+            limit=limit,
+            score_threshold=self.config.score_threshold,
+            mode=mode,
+        )
+        return json.dumps(self._format_tool_search_result(result), ensure_ascii=False)
+
+    async def tool_read(self, *, uri: str, level: str = "overview") -> str:
+        transport = await self._ensure_transport()
+        if level == "abstract":
+            result = await transport.abstract(uri)
+        elif level == "full":
+            result = await transport.read(uri)
+        else:
+            result = await transport.overview(uri)
+        content = self._read_result_content(result)
+        if len(content) > 8000:
+            content = (
+                content[:8000] + "\n\n[... truncated, use a more specific URI or abstract level]"
+            )
+        return json.dumps(
+            {
+                "uri": uri,
+                "level": level,
+                "content": content,
+            },
+            ensure_ascii=False,
+        )
+
+    async def tool_browse(self, *, action: str, path: str = "viking://") -> str:
+        transport = await self._ensure_transport()
+        result: object
+        if action == "tree":
+            result = await transport.tree(path)
+        elif action == "stat":
+            stat_result = await transport.stat(path)
+            return json.dumps(stat_result, ensure_ascii=False)
+        else:
+            result = await transport.ls(path)
+
+        entries: list[dict[str, object]] = []
+        if isinstance(result, list):
+            for item in result[:50]:
+                if not isinstance(item, Mapping):
+                    continue
+                entries.append(
+                    {
+                        "name": item.get("rel_path", item.get("name", "")),
+                        "uri": item.get("uri", ""),
+                        "type": "dir" if bool(item.get("isDir")) else "file",
+                        "abstract": item.get("abstract", ""),
+                    }
+                )
+        return json.dumps({"path": path, "entries": entries}, ensure_ascii=False)
+
+    async def tool_remember(
+        self,
+        *,
+        session_key: str,
+        content: str,
+        category: str = "",
+    ) -> str:
+        text = f"[Remember] {content}"
+        if category:
+            text = f"[Remember — {category}] {content}"
+        await self._append_live_message(
+            session_key=session_key,
+            role="user",
+            parts=[{"type": "text", "text": text}],
+        )
+        return json.dumps(
+            {
+                "status": "stored",
+                "message": "Memory recorded. Will be extracted and indexed on session commit.",
+            },
+            ensure_ascii=False,
+        )
+
+    async def tool_add_resource(self, *, url: str, reason: str = "") -> str:
+        transport = await self._ensure_transport()
+        result = await transport.add_resource(path=url, reason=reason)
+        return json.dumps(
+            {
+                "status": "added",
+                "root_uri": self._extract_root_uri(result),
+                "message": "Resource queued for processing. Use viking_search after a moment to find it.",
+            },
+            ensure_ascii=False,
+        )
+
+    async def mirror_prompt_memory_write(
+        self,
+        *,
+        action: str,
+        target: str,
+        content: str,
+        session_key: str | None = None,
+    ) -> None:
+        if action not in {"add", "replace"} or not content or not session_key:
+            return
+        await self._append_live_message(
+            session_key=session_key,
+            role="user",
+            parts=[
+                {
+                    "type": "text",
+                    "text": f"[Memory note — {target}] {content}",
+                }
+            ],
+        )
+
+    async def finalize_session(
+        self,
+        *,
+        session: object,
+        pending_messages: list[MessagePayload],
+        reason: str | None = None,
+    ) -> None:
+        del reason
+        session_key = self._session_key(session)
+        if session_key is None:
+            return
+
+        lock = self._get_lock(session_key)
+        async with lock:
+            transport = await self._ensure_transport()
+            messages = self._session_messages(session)
+            state = self._read_state(session)
+            if messages is not None and state["mirroredCount"] <= len(messages):
+                live_session_id = state["liveSessionId"]
+                await self._ensure_session_exists(transport, live_session_id)
+                for message in messages[state["mirroredCount"] :]:
+                    transcript = self._transcript_message(message)
+                    if transcript is None:
+                        continue
+                    await transport.add_message(
+                        session_id=live_session_id,
+                        role=transcript[0],
+                        content=transcript[1],
+                    )
+                state["mirroredCount"] = len(messages)
+                self._persist_state(session, state)
+            live_session_id = state["liveSessionId"]
+            if not await transport.session_exists(live_session_id):
+                return
+            await transport.commit_session(live_session_id)
+            await transport.wait_processed(timeout=self.config.wait_processed_timeout_s)
+            await transport.delete_session(live_session_id)
 
     def _session_has_suffix(
         self,
@@ -635,14 +1274,14 @@ class OpenVikingService:
             return self._build_recall_section(result)
 
     async def _recall(self, session: object, query: str) -> OpenVikingRecallBuckets:
-        client = await self._ensure_client()
+        transport = await self._ensure_transport()
         session_id = self._active_search_session_id(session)
-        if session_id is not None and not await client.session_exists(session_id):
+        if session_id is not None and not await transport.session_exists(session_id):
             session_id = None
         results: list[object] = []
         for target_uri in self._recall_targets():
             result = await self._recall_one(
-                client=client,
+                transport=transport,
                 query=query,
                 target_uri=target_uri,
                 session_id=session_id,
@@ -665,7 +1304,7 @@ class OpenVikingService:
             if not self._session_has_suffix(session, persisted_new_messages):
                 return
 
-            client = await self._ensure_client()
+            transport = await self._ensure_transport()
             messages = self._session_messages(session)
             if messages is None:
                 return
@@ -675,12 +1314,12 @@ class OpenVikingService:
                 return
 
             live_session_id = state["liveSessionId"]
-            await self._ensure_session_exists(client, live_session_id)
+            await self._ensure_session_exists(transport, live_session_id)
             for message in messages[state["mirroredCount"] :]:
                 transcript = self._transcript_message(message)
                 if transcript is None:
                     continue
-                await client.add_message(
+                await transport.add_message(
                     session_id=live_session_id,
                     role=transcript[0],
                     content=transcript[1],
@@ -701,17 +1340,17 @@ class OpenVikingService:
 
         lock = self._get_lock(session_key)
         async with lock:
-            client = await self._ensure_client()
+            transport = await self._ensure_transport()
             if pending_messages:
                 archive_session_id = self._archive_session_id(session_key, pending_messages)
-                await self._replace_session_messages(client, archive_session_id, pending_messages)
-                await client.commit_session(archive_session_id)
-                await client.wait_processed(timeout=self.config.wait_processed_timeout_s)
-            await client.delete_session(self._live_session_id(session_key))
+                await self._replace_session_messages(
+                    transport, archive_session_id, pending_messages
+                )
+                await transport.commit_session(archive_session_id)
+                await transport.wait_processed(timeout=self.config.wait_processed_timeout_s)
+            await transport.delete_session(self._live_session_id(session_key))
 
     async def shutdown(self) -> None:
-        if self._client is not None:
-            await self._client.close()
-            self._client = None
-        self.runtime.config_singleton.reset_instance()
-        await self.runtime.async_openviking_cls.reset()
+        if self._transport is not None:
+            await self._transport.close()
+            self._transport = None

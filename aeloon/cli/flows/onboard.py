@@ -11,6 +11,7 @@ from aeloon.core.config.paths import get_workspace_path
 from aeloon.core.config.schema import Config
 from aeloon.utils.helpers import sync_workspace_templates
 
+
 def _print_memory_backend_guidance(config_path: Path) -> None:
     console.print("\nMemory layers:")
     console.print("  - [cyan]prompt memory[/cyan]: local `memory/MEMORY.md` + `memory/USER.md`")
