@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from aeloon.core.config.loader import load_config, save_config
 from aeloon.core.config.schema import Config
+from aeloon.memory.providers.openviking_service import OpenVikingProviderConfig
 
 
 def test_memory_config_exposes_backendless_defaults() -> None:
@@ -35,6 +36,23 @@ def test_memory_config_requires_openviking_section_when_selected() -> None:
                 }
             }
         )
+
+
+def test_openviking_provider_config_accepts_mode_and_config_path() -> None:
+    config = OpenVikingProviderConfig.model_validate(
+        {
+            "mode": "embedded",
+            "configPath": "/tmp/ov.conf",
+            "ovConfig": {
+                "storage": {"agfs": {"port": 1833}},
+                "embedding": {"dense": {"provider": "mock"}},
+                "vlm": {"provider": "mock", "api_key": "k", "model": "m"},
+            },
+        }
+    )
+
+    assert config.mode == "embedded"
+    assert config.config_path == "/tmp/ov.conf"
 
 
 def test_save_and_load_round_trip_memory_config(tmp_path) -> None:
@@ -82,6 +100,8 @@ def test_save_and_load_round_trip_openviking_memory_config(tmp_path: Path) -> No
                 "provider": "openviking",
                 "providers": {
                     "openviking": {
+                        "mode": "embedded",
+                        "configPath": "/tmp/ov.conf",
                         "storageSubdir": "openviking_memory",
                         "searchMode": "search",
                         "searchLimit": 6,
@@ -109,6 +129,8 @@ def test_save_and_load_round_trip_openviking_memory_config(tmp_path: Path) -> No
     openviking = saved["memory"]["providers"]["openviking"]
     assert "backend" not in saved["memory"]
     assert "backends" not in saved["memory"]
+    assert openviking["mode"] == "embedded"
+    assert openviking["configPath"] == "/tmp/ov.conf"
     assert openviking["storageSubdir"] == "openviking_memory"
     assert openviking["searchMode"] == "search"
     assert openviking["extraTargetUris"] == ["viking://session/default"]
@@ -118,6 +140,8 @@ def test_save_and_load_round_trip_openviking_memory_config(tmp_path: Path) -> No
 
     loaded = load_config(config_path)
     assert loaded.memory.provider == "openviking"
+    assert loaded.memory.providers["openviking"]["mode"] == "embedded"
+    assert loaded.memory.providers["openviking"]["configPath"] == "/tmp/ov.conf"
     assert loaded.memory.providers["openviking"]["searchMode"] == "search"
     assert loaded.memory.providers["openviking"]["searchLimit"] == 6
     assert loaded.memory.providers["openviking"]["extraTargetUris"] == ["viking://session/default"]

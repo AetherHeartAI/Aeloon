@@ -302,6 +302,51 @@ async def test_openviking_provider_prefetch_returns_background_context(
 
 
 @pytest.mark.asyncio
+async def test_openviking_provider_prefetch_propagates_imported_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from aeloon.memory.providers.openviking import OpenVikingProvider
+
+    factory, config_singleton = _install_fake_runtime(monkeypatch)
+    factory.default_search_result = FakeFindResult()
+    provider = OpenVikingProvider(
+        {
+            "mode": "embedded",
+            "configPath": "/tmp/ov.conf",
+            "ovConfig": {
+                "storage": {"agfs": {"port": 1833}},
+                "embedding": {"dense": {"provider": "mock", "model": "embed", "api_key": "k"}},
+                "vlm": {"provider": "mock", "model": "vlm", "api_key": "k"},
+            },
+        },
+        _make_deps(tmp_path),
+    )
+
+    await provider.prefetch(
+        session=Session(key="cli:test"),
+        query="hello",
+        channel="cli",
+        chat_id="direct",
+        current_role="user",
+    )
+
+    config_dict = cast(
+        dict[str, object],
+        config_singleton.initialize_calls[0]["config_dict"],
+    )
+    storage = cast(dict[str, object], config_dict["storage"])
+
+    assert cast(dict[str, object], config_dict["embedding"])["dense"] == {
+        "provider": "mock",
+        "model": "embed",
+        "api_key": "k",
+    }
+    assert config_dict["vlm"] == {"provider": "mock", "model": "vlm", "api_key": "k"}
+    assert storage["workspace"] == str(tmp_path / "memory" / "openviking_memory")
+
+
+@pytest.mark.asyncio
 async def test_openviking_provider_sync_turn_mirrors_messages_to_live_session(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -356,6 +401,37 @@ async def test_openviking_provider_on_pre_compress_archives_pending_messages(
     assert client.commit_session_calls
     assert client.wait_processed_calls == [18.0]
     assert client.delete_session_calls == ["aeloon-live-cli_test"]
+
+
+@pytest.mark.asyncio
+async def test_openviking_provider_rejects_http_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from aeloon.memory.providers.openviking import OpenVikingProvider
+
+    _install_fake_runtime(monkeypatch)
+    provider = OpenVikingProvider(
+        {
+            "mode": "http",
+            "configPath": "/tmp/ov.conf",
+            "ovConfig": {
+                "storage": {"agfs": {"port": 1833}},
+                "embedding": {"dense": {"provider": "mock", "model": "embed", "api_key": "k"}},
+                "vlm": {"provider": "mock", "model": "vlm", "api_key": "k"},
+            },
+        },
+        _make_deps(tmp_path),
+    )
+
+    with pytest.raises(RuntimeError, match="HTTP mode is not implemented"):
+        await provider.prefetch(
+            session=Session(key="cli:test"),
+            query="hello",
+            channel="cli",
+            chat_id="direct",
+            current_role="user",
+        )
 
 
 @pytest.mark.asyncio

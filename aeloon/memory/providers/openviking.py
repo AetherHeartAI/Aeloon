@@ -32,6 +32,17 @@ OPENVIKING_CONFIG_SCHEMA: list[dict[str, object]] = [
         "default": "search",
         "choices": ["search", "find"],
     },
+    {
+        "key": "mode",
+        "description": "OpenViking mode",
+        "default": "embedded",
+        "choices": ["embedded", "http"],
+    },
+    {
+        "key": "configPath",
+        "description": "OpenViking config",
+        "default": "~/.openviking/ov.conf",
+    },
 ]
 
 
@@ -91,6 +102,7 @@ class OpenVikingProvider(MemoryProvider):
     def save_setup_values(cls, values: dict[str, object], loaded_config: Config) -> None:
         provider_values = loaded_config.memory.providers.setdefault(cls.name, {})
         provider_values.update(values)
+        provider_values.setdefault("mode", "embedded")
         provider_values.setdefault("ovConfig", {"storage": {}})
 
     def get_config_schema(self) -> list[dict[str, object]]:

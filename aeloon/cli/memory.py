@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import typer
@@ -18,6 +19,10 @@ from aeloon.core.config.paths import (
 from aeloon.core.config.schema import Config
 from aeloon.core.session.manager import SessionManager
 from aeloon.memory.archive_service import SessionArchiveService
+from aeloon.memory.providers.openviking_import import (
+    load_openviking_seed_config,
+    resolve_openviking_config_path,
+)
 from aeloon.memory.providers.openviking import OpenVikingProvider
 
 memory_app = typer.Typer(help="Manage layered memory providers and status.")
@@ -58,6 +63,24 @@ def _write_env_values(env_path: Path, values: dict[str, str]) -> None:
     env_path.write_text(payload + ("\n" if payload else ""), encoding="utf-8")
 
 
+def _prepare_openviking_setup_values(non_secret_values: dict[str, object]) -> tuple[dict[str, object], Path]:
+    raw_config_path = non_secret_values.get("configPath")
+    config_path = resolve_openviking_config_path(
+        raw_config_path if isinstance(raw_config_path, str) else None
+    )
+    if not config_path.exists():
+        raise typer.BadParameter(f"OpenViking config file not found: {config_path}")
+    try:
+        imported = load_openviking_seed_config(config_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise typer.BadParameter(f"Failed to load OpenViking config: {exc}") from exc
+
+    prepared = dict(non_secret_values)
+    prepared["configPath"] = str(config_path)
+    prepared["ovConfig"] = imported
+    return prepared, config_path
+
+
 @memory_app.command("setup")
 def setup_memory(
     provider_name: str = typer.Argument(..., help="Provider to configure, e.g. openviking"),
@@ -77,12 +100,18 @@ def setup_memory(
             secret_values[str(field["env_var"])] = value
         else:
             non_secret_values[key] = value
+    imported_from: Path | None = None
+    if provider_name == "openviking":
+        non_secret_values, imported_from = _prepare_openviking_setup_values(non_secret_values)
     loaded.memory.provider = provider_name
     _save_provider_values(provider_name, non_secret_values, loaded)
     save_config(loaded, config_path)
     if secret_values:
         _write_env_values(get_env_path(config_path=config_path), secret_values)
     console.print(f"Memory provider configured: {provider_name}")
+    if imported_from is not None:
+        console.print(f"Imported OpenViking config from {imported_from}")
+        console.print(f"Mode: {non_secret_values.get('mode', 'embedded')}")
 
 
 @memory_app.command("status")
@@ -96,6 +125,13 @@ def memory_status(
     console.print(f"Prompt memory: {'on' if loaded.memory.prompt.enabled else 'off'}")
     console.print(f"Archive: {'on' if loaded.memory.archive.enabled else 'off'}")
     console.print(f"Provider: {provider_name}")
+    if provider_name == "openviking":
+        provider_config = loaded.memory.providers.get("openviking", {})
+        mode = provider_config.get("mode", "embedded")
+        console.print(f"Mode: {mode}")
+        config_source = provider_config.get("configPath")
+        if isinstance(config_source, str) and config_source:
+            console.print(f"Config source: {config_source}")
     console.print(f"Prompt memory dir: {get_prompt_memory_dir(config_path=config_path)}")
     console.print(f"Archive DB: {get_archive_db_path(config_path=config_path)}")
     console.print(f"Env file: {get_env_path(config_path=config_path)}")

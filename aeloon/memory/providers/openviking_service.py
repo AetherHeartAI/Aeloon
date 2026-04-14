@@ -173,6 +173,8 @@ def _default_ov_config() -> dict[str, object]:
 
 
 class OpenVikingProviderConfig(BaseModel):
+    mode: str = Field(default="embedded", alias="mode")
+    config_path: str | None = Field(default=None, alias="configPath")
     storage_subdir: str = Field(default="openviking_memory", alias="storageSubdir")
     ov_config: dict[str, object] = Field(
         default_factory=_default_ov_config,
@@ -185,6 +187,24 @@ class OpenVikingProviderConfig(BaseModel):
     extra_target_uris: list[str] = Field(default_factory=list, alias="extraTargetUris")
     recall_timeout_s: float = Field(default=20.0, alias="recallTimeoutS", gt=0)
     wait_processed_timeout_s: float = Field(default=30.0, alias="waitProcessedTimeoutS", gt=0)
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, value: str) -> str:
+        mode = value.strip().lower()
+        if mode not in {"embedded", "http"}:
+            raise ValueError("mode must be either 'embedded' or 'http'")
+        return mode
+
+    @field_validator("config_path", mode="before")
+    @classmethod
+    def normalize_config_path(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("configPath must be a string")
+        text = value.strip()
+        return text or None
 
     @field_validator("storage_subdir")
     @classmethod
@@ -274,6 +294,11 @@ class OpenVikingService:
         async with self._client_init_lock:
             if self._client is not None:
                 return self._client
+            if self.config.mode == "http":
+                raise RuntimeError(
+                    "OpenViking HTTP mode is not implemented in Aeloon yet. "
+                    "Use mode='embedded' for now."
+                )
 
             inline_config = self._prepare_inline_config()
             self.storage_root.mkdir(parents=True, exist_ok=True)
