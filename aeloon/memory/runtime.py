@@ -122,6 +122,7 @@ class MemoryRuntime:
         provider_manager: ProviderManagerProtocol | None = None,
         flush_coordinator: FlushCoordinatorProtocol | None = None,
     ) -> None:
+        self._sessions = deps.sessions
         self.local_memory = local_memory or LocalMemoryRuntime(
             config=memory_config.local,
             prompt_config=memory_config.prompt,
@@ -177,7 +178,25 @@ class MemoryRuntime:
         sections = list(prepared.system_sections)
         skills = list(prepared.always_skill_names)
         if self.prompt_memory is not None:
-            self.prompt_memory.refresh_snapshot()
+            snapshot = session.get_prompt_memory_snapshot() if isinstance(session, Session) else None
+            if snapshot is None:
+                self.prompt_memory.load_from_disk()
+                over_limit = self.prompt_memory.over_limit_status()
+                if over_limit:
+                    for target, (current, limit) in over_limit.items():
+                        logger.warning(
+                            "Prompt memory {} is over limit for session {}: {}/{} chars",
+                            target,
+                            getattr(session, "key", "unknown"),
+                            current,
+                            limit,
+                        )
+                snapshot = self.prompt_memory.snapshot_payload()
+                if isinstance(session, Session):
+                    session.set_prompt_memory_snapshot(snapshot)
+                    self._sessions.save(session)
+            else:
+                self.prompt_memory.load_snapshot_payload(snapshot)
             prompt_sections = self.prompt_memory.system_prompt_sections()
             sections = [*prompt_sections, *sections]
             if prompt_sections:

@@ -26,7 +26,6 @@ class LocalMemoryRuntime:
         self.deps = deps
         self.store = LocalMemoryStore(
             directory=deps.workspace / prompt_config.directory,
-            memory_file_name=prompt_config.memory_file,
             history_file_name=config.history_file,
             max_failures_before_raw_archive=config.max_failures_before_raw_archive,
         )
@@ -35,10 +34,6 @@ class LocalMemoryRuntime:
         self._build_messages = deps.build_messages
         self._get_tool_definitions = deps.get_tool_definitions
         self._locks: dict[str, asyncio.Lock] = {}
-
-    @property
-    def memory_file(self):
-        return self.store.memory_file
 
     @property
     def history_file(self):
@@ -71,8 +66,8 @@ class LocalMemoryRuntime:
         return TurnMemoryContext(
             history_start_index=self.pending_start_index(session),
             runtime_lines=[
-                "Memory mode: local",
-                f"Prompt memory: {self.memory_file}",
+                "Memory mode: local archive",
+                "Prompt memory owned by PromptMemoryStore",
                 f"History log: {self.history_file}",
             ],
         )

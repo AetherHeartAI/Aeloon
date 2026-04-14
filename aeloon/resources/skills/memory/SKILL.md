@@ -8,9 +8,16 @@ always: false
 
 ## Structure
 
-- `memory/MEMORY.md` — Stable project and environment facts. Always loaded into your context.
-- `memory/USER.md` — Stable user preferences and long-lived personalization data. Always loaded into your context.
-- `memory/HISTORY.md` — Legacy archive log. Do not treat it as the primary recall path.
+- `memory/MEMORY.md` — Prompt memory for stable project and environment facts.
+- `memory/USER.md` — Prompt memory for stable user preferences and long-lived personalization data.
+- `memory/HISTORY.md` — Archive log for timeline/history summaries. Not prompt memory.
+
+## Snapshot Semantics
+
+- Writes to prompt memory are durable immediately.
+- Prompt memory is captured as a frozen snapshot for the active session.
+- New prompt-memory entries do not appear in the current session's prompt after they are written.
+- Updated prompt-memory entries are injected on the next real session.
 
 ## When To Use The `memory` Tool
 
@@ -35,3 +42,10 @@ Use transcript-recall tooling for past conversations when available. `HISTORY.md
 ## Prompt-Memory Scope
 
 Keep prompt memory small, durable, and high-signal so it remains safe to inject every turn.
+
+## Naming Warning
+
+Do not confuse:
+
+- `<workspace>/USER.md` — bootstrap context file
+- `<workspace>/memory/USER.md` — prompt-memory file managed by the `memory` tool

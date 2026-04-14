@@ -82,6 +82,22 @@ class Session:
         if isinstance(local_state, dict) and not local_state:
             self.memory_state.pop("local", None)
 
+    def get_prompt_memory_snapshot(self) -> dict[str, str] | None:
+        raw = self.memory_state.get("prompt_memory")
+        if not isinstance(raw, dict):
+            return None
+        memory = raw.get("memory")
+        user = raw.get("user")
+        if isinstance(memory, str) and isinstance(user, str):
+            return {"memory": memory, "user": user}
+        return None
+
+    def set_prompt_memory_snapshot(self, snapshot: dict[str, str]) -> None:
+        self.memory_state["prompt_memory"] = {
+            "memory": snapshot.get("memory", ""),
+            "user": snapshot.get("user", ""),
+        }
+
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
         """Add a message to the session."""
         msg = {"role": role, "content": content, "timestamp": datetime.now().isoformat(), **kwargs}

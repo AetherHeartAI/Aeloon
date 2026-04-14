@@ -29,9 +29,9 @@ class PromptMemoryStore:
         self.memory_entries: list[str] = []
         self.user_entries: list[str] = []
         self._system_prompt_snapshot = {"memory": "", "user": ""}
-        self.refresh_snapshot()
+        self.load_from_disk()
 
-    def refresh_snapshot(self) -> None:
+    def load_from_disk(self) -> None:
         """Refresh live entries and capture a new prompt snapshot."""
         self.memory_entries = self._dedupe(self._read_file(self.memory_path))
         self.user_entries = self._dedupe(self._read_file(self.user_path))
@@ -40,13 +40,34 @@ class PromptMemoryStore:
             "user": self._render_block("user", self.user_entries),
         }
 
+    def refresh_snapshot(self) -> None:
+        self.load_from_disk()
+
+    def snapshot_payload(self) -> dict[str, str]:
+        return {
+            "memory": self._system_prompt_snapshot.get("memory", ""),
+            "user": self._system_prompt_snapshot.get("user", ""),
+        }
+
+    def load_snapshot_payload(self, payload: dict[str, str]) -> None:
+        self._system_prompt_snapshot = {
+            "memory": str(payload.get("memory", "")),
+            "user": str(payload.get("user", "")),
+        }
+
+    def format_for_system_prompt(self, target: MemoryTarget) -> str | None:
+        block = self._system_prompt_snapshot.get(target, "")
+        return block or None
+
     def system_prompt_sections(self) -> list[str]:
         """Render frozen prompt sections for the current turn."""
         sections: list[str] = []
-        if self._system_prompt_snapshot["memory"]:
-            sections.append("# Memory\n\n" + self._system_prompt_snapshot["memory"])
-        if self._system_prompt_snapshot["user"]:
-            sections.append("# User Memory\n\n" + self._system_prompt_snapshot["user"])
+        memory_block = self.format_for_system_prompt("memory")
+        if memory_block:
+            sections.append("# Memory\n\n" + memory_block)
+        user_block = self.format_for_system_prompt("user")
+        if user_block:
+            sections.append("# User Memory\n\n" + user_block)
         return sections
 
     def add(self, target: MemoryTarget, content: str) -> dict[str, object]:
@@ -68,13 +89,15 @@ class PromptMemoryStore:
             new_total = len(ENTRY_DELIMITER.join([*entries, normalized]))
             limit = self._char_limit(target)
             if new_total > limit:
-                usage = f"{self._char_count(target):,}/{limit:,}"
+                current = self._char_count(target)
+                usage = f"{current:,}/{limit:,}"
                 return {
                     "success": False,
                     "error": (
                         f"Memory at {usage} chars. "
                         f"Adding this entry ({len(normalized)} chars) would exceed the limit."
                     ),
+                    "current_entries": list(entries),
                     "usage": usage,
                 }
 
@@ -100,18 +123,33 @@ class PromptMemoryStore:
         with self._file_lock(self._path_for(target)):
             self._reload_target(target)
             entries = self._entries_for(target)
-            matches = [index for index, entry in enumerate(entries) if match_text in entry]
+            matches = [(index, entry) for index, entry in enumerate(entries) if match_text in entry]
             if not matches:
-                return {"success": False, "error": "No matching entry found."}
+                return {"success": False, "error": f"No entry matched '{match_text}'."}
             if len(matches) > 1:
-                return {"success": False, "error": "old_text matched multiple entries."}
+                unique_texts = {entry for _, entry in matches}
+                if len(unique_texts) > 1:
+                    previews = [
+                        entry[:80] + ("..." if len(entry) > 80 else "")
+                        for _, entry in matches
+                    ]
+                    return {
+                        "success": False,
+                        "error": f"Multiple entries matched '{match_text}'. Be more specific.",
+                        "matches": previews,
+                    }
 
             updated = list(entries)
-            updated[matches[0]] = replacement
-            if len(ENTRY_DELIMITER.join(updated)) > self._char_limit(target):
+            updated[matches[0][0]] = replacement
+            limit = self._char_limit(target)
+            new_total = len(ENTRY_DELIMITER.join(updated))
+            if new_total > limit:
                 return {
                     "success": False,
-                    "error": "Replacement would exceed the configured character limit.",
+                    "error": (
+                        f"Replacement would put memory at {new_total:,}/{limit:,} chars. "
+                        "Shorten the new content or remove other entries first."
+                    ),
                 }
 
             self._set_entries(target, updated)
@@ -119,22 +157,32 @@ class PromptMemoryStore:
 
         return self._success_response(target, "Entry replaced.")
 
-    def remove(self, target: MemoryTarget, content: str) -> dict[str, object]:
+    def remove(self, target: MemoryTarget, old_text: str) -> dict[str, object]:
         """Remove a single entry matched by substring."""
-        match_text = content.strip()
+        match_text = old_text.strip()
         if not match_text:
-            return {"success": False, "error": "content cannot be empty."}
+            return {"success": False, "error": "old_text cannot be empty."}
 
         with self._file_lock(self._path_for(target)):
             self._reload_target(target)
             entries = self._entries_for(target)
-            matches = [index for index, entry in enumerate(entries) if match_text in entry]
+            matches = [(index, entry) for index, entry in enumerate(entries) if match_text in entry]
             if not matches:
-                return {"success": False, "error": "No matching entry found."}
+                return {"success": False, "error": f"No entry matched '{match_text}'."}
             if len(matches) > 1:
-                return {"success": False, "error": "content matched multiple entries."}
+                unique_texts = {entry for _, entry in matches}
+                if len(unique_texts) > 1:
+                    previews = [
+                        entry[:80] + ("..." if len(entry) > 80 else "")
+                        for _, entry in matches
+                    ]
+                    return {
+                        "success": False,
+                        "error": f"Multiple entries matched '{match_text}'. Be more specific.",
+                        "matches": previews,
+                    }
 
-            updated = [entry for index, entry in enumerate(entries) if index != matches[0]]
+            updated = [entry for index, entry in enumerate(entries) if index != matches[0][0]]
             self._set_entries(target, updated)
             self._write_file(self._path_for(target), updated)
 
@@ -177,24 +225,44 @@ class PromptMemoryStore:
 
     def _success_response(self, target: MemoryTarget, message: str) -> dict[str, object]:
         entries = list(self._entries_for(target))
+        current = self._char_count(target)
+        limit = self._char_limit(target)
+        pct = min(100, int((current / limit) * 100)) if limit > 0 else 0
         return {
             "success": True,
             "target": target,
             "message": message,
             "entries": entries,
-            "usage": f"{self._char_count(target):,}/{self._char_limit(target):,}",
+            "usage": f"{pct}% — {current:,}/{limit:,} chars",
+            "entry_count": len(entries),
         }
 
     @staticmethod
     def _dedupe(entries: list[str]) -> list[str]:
         return list(dict.fromkeys(entries))
 
-    @staticmethod
-    def _render_block(target: MemoryTarget, entries: list[str]) -> str:
+    def _render_block(self, target: MemoryTarget, entries: list[str]) -> str:
         if not entries:
             return ""
-        title = "Stable facts" if target == "memory" else "Stable user preferences"
-        return title + ":\n\n" + "\n\n".join(entries)
+        limit = self._char_limit(target)
+        content = ENTRY_DELIMITER.join(entries)
+        current = len(content)
+        pct = min(100, int((current / limit) * 100)) if limit > 0 else 0
+        if target == "user":
+            header = f"USER PROFILE (who the user is) [{pct}% — {current:,}/{limit:,} chars]"
+        else:
+            header = f"MEMORY (your personal notes) [{pct}% — {current:,}/{limit:,} chars]"
+        separator = "═" * 46
+        return f"{separator}\n{header}\n{separator}\n{content}"
+
+    def over_limit_status(self) -> dict[str, tuple[int, int]]:
+        status: dict[str, tuple[int, int]] = {}
+        for target in ("memory", "user"):
+            current = self._char_count(target)
+            limit = self._char_limit(target)
+            if current > limit:
+                status[target] = (current, limit)
+        return status
 
     @staticmethod
     def _read_file(path: Path) -> list[str]:

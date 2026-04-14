@@ -50,15 +50,11 @@ class MemoryTool(Tool):
                 },
                 "content": {
                     "type": "string",
-                    "description": "Entry content for add/remove operations.",
+                    "description": "The entry content. Required for 'add' and 'replace'.",
                 },
                 "old_text": {
                     "type": "string",
-                    "description": "Substring that identifies the entry to replace.",
-                },
-                "new_content": {
-                    "type": "string",
-                    "description": "Replacement content for replace operations.",
+                    "description": "Short unique substring identifying the entry to replace or remove.",
                 },
             },
             "required": ["action", "target"],
@@ -73,7 +69,6 @@ class MemoryTool(Tool):
         target = str(kwargs.get("target", ""))
         content = kwargs.get("content")
         old_text = kwargs.get("old_text")
-        new_content = kwargs.get("new_content")
         if target not in {"memory", "user"}:
             return json.dumps(
                 {"success": False, "error": f"Unsupported target: {target}"},
@@ -83,12 +78,15 @@ class MemoryTool(Tool):
         if action == "add":
             result = self.store.add(memory_target, str(content or ""))
         elif action == "replace":
-            result = self.store.replace(memory_target, str(old_text or ""), str(new_content or ""))
+            result = self.store.replace(memory_target, str(old_text or ""), str(content or ""))
         elif action == "remove":
-            result = self.store.remove(memory_target, str(content or ""))
+            result = self.store.remove(memory_target, str(old_text or ""))
         else:
             result = {"success": False, "error": f"Unsupported action: {action}"}
-        if result.get("success") is True and self._on_write is not None:
-            write_content = str(new_content or content or "")
-            await self._on_write(action=action, target=target, content=write_content)
+        if (
+            result.get("success") is True
+            and self._on_write is not None
+            and action in {"add", "replace"}
+        ):
+            await self._on_write(action=action, target=target, content=str(content or ""))
         return json.dumps(result, ensure_ascii=False)

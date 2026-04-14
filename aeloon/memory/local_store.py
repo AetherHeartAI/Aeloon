@@ -1,4 +1,4 @@
-"""Local MEMORY.md and HISTORY.md persistence."""
+"""Local archive memory persistence."""
 
 from __future__ import annotations
 
@@ -12,12 +12,12 @@ from aeloon.memory.types import MessagePayload
 from aeloon.providers.base import LLMProvider
 from aeloon.utils.helpers import ensure_dir
 
-_SAVE_MEMORY_TOOL = [
+_SAVE_HISTORY_TOOL = [
     {
         "type": "function",
         "function": {
-            "name": "save_memory",
-            "description": "Save the memory consolidation result to persistent storage.",
+            "name": "save_history",
+            "description": "Save the archive consolidation result to persistent storage.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -25,12 +25,8 @@ _SAVE_MEMORY_TOOL = [
                         "type": "string",
                         "description": "A paragraph summarizing key events or decisions.",
                     },
-                    "memory_update": {
-                        "type": "string",
-                        "description": "Full updated long-term memory as markdown.",
-                    },
                 },
-                "required": ["history_entry", "memory_update"],
+                "required": ["history_entry"],
             },
         },
     }
@@ -70,31 +66,17 @@ class LocalMemoryStore:
         self,
         *,
         directory: Path,
-        memory_file_name: str,
         history_file_name: str,
         max_failures_before_raw_archive: int,
     ) -> None:
         self.directory = ensure_dir(directory)
-        self.memory_file = self.directory / memory_file_name
         self.history_file = self.directory / history_file_name
         self._max_failures_before_raw_archive = max_failures_before_raw_archive
         self._consecutive_failures = 0
 
-    def read_long_term(self) -> str:
-        if self.memory_file.exists():
-            return self.memory_file.read_text(encoding="utf-8")
-        return ""
-
-    def write_long_term(self, content: str) -> None:
-        self.memory_file.write_text(content, encoding="utf-8")
-
     def append_history(self, entry: str) -> None:
         with open(self.history_file, "a", encoding="utf-8") as file:
             file.write(entry.rstrip() + "\n\n")
-
-    def get_memory_context(self) -> str:
-        long_term = self.read_long_term()
-        return f"## Long-term Memory\n{long_term}" if long_term else ""
 
     @staticmethod
     def _format_messages(messages: list[MessagePayload]) -> str:
@@ -118,11 +100,10 @@ class LocalMemoryStore:
         if not messages:
             return True
 
-        current_memory = self.read_long_term()
-        prompt = f"""Process this conversation and call the save_memory tool with your consolidation.
+        prompt = f"""Summarize this conversation slice for archival history.
 
-## Current Long-term Memory
-{current_memory or "(empty)"}
+Do NOT rewrite prompt memory files (MEMORY.md / USER.md).
+Prompt memory is maintained separately by the memory tool and flush pipeline.
 
 ## Conversation to Process
 {self._format_messages(messages)}"""
@@ -130,16 +111,19 @@ class LocalMemoryStore:
         chat_messages = [
             {
                 "role": "system",
-                "content": "You are a memory consolidation agent. Call the save_memory tool with your consolidation of the conversation.",
+                "content": (
+                    "You are an archive consolidation agent. "
+                    "Call the save_history tool with a grep-friendly archival summary."
+                ),
             },
             {"role": "user", "content": prompt},
         ]
 
         try:
-            forced = {"type": "function", "function": {"name": "save_memory"}}
+            forced = {"type": "function", "function": {"name": "save_history"}}
             response = await provider.chat_with_retry(
                 messages=chat_messages,
-                tools=_SAVE_MEMORY_TOOL,
+                tools=_SAVE_HISTORY_TOOL,
                 model=model,
                 tool_choice=forced,
             )
@@ -148,14 +132,14 @@ class LocalMemoryStore:
                 logger.warning("Forced tool_choice unsupported, retrying with auto")
                 response = await provider.chat_with_retry(
                     messages=chat_messages,
-                    tools=_SAVE_MEMORY_TOOL,
+                    tools=_SAVE_HISTORY_TOOL,
                     model=model,
                     tool_choice="auto",
                 )
 
             if not response.has_tool_calls:
                 logger.warning(
-                    "Memory consolidation: LLM did not call save_memory "
+                    "Memory consolidation: LLM did not call save_history "
                     "(finish_reason={}, content_len={}, content_preview={})",
                     response.finish_reason,
                     len(response.content or ""),
@@ -168,13 +152,12 @@ class LocalMemoryStore:
                 logger.warning("Memory consolidation: unexpected save_memory arguments")
                 return self._fail_or_raw_archive(messages)
 
-            if "history_entry" not in args or "memory_update" not in args:
-                logger.warning("Memory consolidation: save_memory payload missing required fields")
+            if "history_entry" not in args:
+                logger.warning("Memory consolidation: save_history payload missing required fields")
                 return self._fail_or_raw_archive(messages)
 
             entry = args["history_entry"]
-            update = args["memory_update"]
-            if entry is None or update is None:
+            if entry is None:
                 logger.warning(
                     "Memory consolidation: save_memory payload contains null required fields"
                 )
@@ -186,10 +169,6 @@ class LocalMemoryStore:
                 return self._fail_or_raw_archive(messages)
 
             self.append_history(entry_text)
-            update_text = _ensure_text(update)
-            if update_text != current_memory:
-                self.write_long_term(update_text)
-
             self._consecutive_failures = 0
             logger.info("Memory consolidation done for {} messages", len(messages))
             return True

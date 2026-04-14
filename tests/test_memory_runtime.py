@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from aeloon.core.agent.output_manager import OutputManager
 from aeloon.core.config.schema import Config, PromptMemoryConfig
 from aeloon.core.session.manager import Session, SessionManager
 from aeloon.memory.prompt_store import PromptMemoryStore
@@ -131,11 +132,23 @@ class _DummyProviderManager:
         return None
 
 
+class _DummyArchiveService:
+    async def ingest_session(self, session: Session) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+
 @pytest.mark.asyncio
 async def test_memory_runtime_owns_local_memory_and_component_slots(tmp_path: Path) -> None:
     from aeloon.memory.runtime import MemoryRuntime
 
-    runtime = MemoryRuntime(memory_config=Config().memory, deps=_make_deps(tmp_path))
+    runtime = MemoryRuntime(
+        memory_config=Config().memory,
+        deps=_make_deps(tmp_path),
+        session_archive=_DummyArchiveService(),
+    )
 
     assert runtime.local_memory is not None
     assert runtime.prompt_memory is not None
@@ -158,6 +171,7 @@ async def test_memory_runtime_prepare_turn_injects_prompt_memory_and_provider_re
         deps=_make_deps(tmp_path),
         local_memory=_DummyLocalMemory(),
         prompt_memory=prompt_memory,
+        session_archive=_DummyArchiveService(),
         provider_manager=_DummyProviderManager(),
     )
 
@@ -174,6 +188,58 @@ async def test_memory_runtime_prepare_turn_injects_prompt_memory_and_provider_re
     assert "openviking-memory" in prepared.always_skill_names
     assert any("Workspace uses concise progress updates." in section for section in prepared.system_sections)
     assert any("Provider recall" in block for block in prepared.recalled_context_blocks)
+
+
+@pytest.mark.asyncio
+async def test_memory_runtime_reuses_session_snapshot_until_new_session(tmp_path: Path) -> None:
+    from aeloon.memory.runtime import MemoryRuntime
+
+    prompt_memory = PromptMemoryStore(tmp_path, PromptMemoryConfig())
+    prompt_memory.add("memory", "Initial fact.")
+    prompt_memory.refresh_snapshot()
+    runtime = MemoryRuntime(
+        memory_config=Config().memory,
+        deps=_make_deps(tmp_path),
+        local_memory=_DummyLocalMemory(),
+        prompt_memory=prompt_memory,
+        session_archive=_DummyArchiveService(),
+    )
+    session = Session(key="cli:test")
+
+    first = await runtime.prepare_turn(
+        session=session,
+        query="hello",
+        channel="cli",
+        chat_id="direct",
+        current_role="user",
+    )
+
+    prompt_memory.add("memory", "New fact written mid-session.")
+
+    second = await runtime.prepare_turn(
+        session=session,
+        query="hello again",
+        channel="cli",
+        chat_id="direct",
+        current_role="user",
+    )
+
+    first_sections = "\n".join(first.system_sections)
+    second_sections = "\n".join(second.system_sections)
+    assert "Initial fact." in first_sections
+    assert "New fact written mid-session." not in second_sections
+
+    session.clear()
+
+    third = await runtime.prepare_turn(
+        session=session,
+        query="new session",
+        channel="cli",
+        chat_id="direct",
+        current_role="user",
+    )
+
+    assert "New fact written mid-session." in "\n".join(third.system_sections)
 
 
 @pytest.mark.asyncio
@@ -201,6 +267,7 @@ async def test_memory_runtime_flush_delegates_to_flush_coordinator(tmp_path: Pat
         memory_config=Config().memory,
         deps=_make_deps(tmp_path),
         local_memory=_DummyLocalMemory(),
+        session_archive=_DummyArchiveService(),
         flush_coordinator=flush,
     )
 
@@ -244,6 +311,7 @@ async def test_memory_runtime_on_shutdown_flushes_then_closes_components(tmp_pat
         memory_config=Config().memory,
         deps=_make_deps(tmp_path),
         local_memory=DummyLocalMemory(),
+        session_archive=_DummyArchiveService(),
         provider_manager=DummyProviderManager(),
         flush_coordinator=DummyFlushCoordinator(),
     )
@@ -262,15 +330,44 @@ async def test_memory_runtime_on_shutdown_flushes_then_closes_components(tmp_pat
     ]
 
 
+def test_memory_runtime_forwards_output_manager_to_local_memory(tmp_path: Path) -> None:
+    from aeloon.memory.runtime import MemoryRuntime
+
+    seen: list[OutputManager] = []
+
+    class LocalMemoryWithOutputManager(_DummyLocalMemory):
+        def set_output_manager(self, manager: OutputManager) -> None:
+            seen.append(manager)
+
+    runtime = MemoryRuntime(
+        memory_config=Config().memory,
+        deps=_make_deps(tmp_path),
+        local_memory=LocalMemoryWithOutputManager(),
+        session_archive=_DummyArchiveService(),
+        flush_coordinator=None,
+    )
+    manager = OutputManager(tmp_path)
+
+    runtime.set_output_manager(manager)
+
+    assert seen == [manager]
 def test_agent_loop_uses_memory_runtime_with_local_memory(tmp_path: Path) -> None:
     from aeloon.core.agent.loop import AgentLoop
     from aeloon.core.bus.queue import MessageBus
+    from aeloon.core.config.schema import Config
     from aeloon.memory.runtime import MemoryRuntime
 
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
+    config = Config.model_validate({"memory": {"archive": {"enabled": False}}})
 
-    loop = AgentLoop(bus=MessageBus(), provider=provider, workspace=tmp_path, model="test-model")
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path,
+        model="test-model",
+        memory_config=config.memory,
+    )
 
     assert isinstance(loop.memory, MemoryRuntime)
     assert loop.memory.local_memory is not None
@@ -291,3 +388,23 @@ def test_memory_public_api_exports_backendless_symbols() -> None:
     assert MemoryRuntime is not None
     assert MemoryRuntimeDeps is not None
     assert TurnMemoryContext is not None
+
+
+def test_session_prompt_memory_snapshot_round_trips_through_session_manager(tmp_path: Path) -> None:
+    sessions = SessionManager(tmp_path)
+    session = sessions.get_or_create("cli:test")
+    session.set_prompt_memory_snapshot(
+        {
+            "memory": "memory snapshot",
+            "user": "user snapshot",
+        }
+    )
+    sessions.save(session)
+    sessions.invalidate(session.key)
+
+    restored = sessions.get_or_create("cli:test")
+
+    assert restored.get_prompt_memory_snapshot() == {
+        "memory": "memory snapshot",
+        "user": "user snapshot",
+    }

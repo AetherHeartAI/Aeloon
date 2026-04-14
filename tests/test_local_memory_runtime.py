@@ -126,5 +126,6 @@ async def test_local_memory_runtime_prepare_turn_reports_local_memory(tmp_path: 
         current_role="user",
     )
 
-    assert prepared.runtime_lines[0] == "Memory mode: local"
+    assert prepared.runtime_lines[0] == "Memory mode: local archive"
+    assert prepared.runtime_lines[1] == "Prompt memory owned by PromptMemoryStore"
     assert prepared.history_start_index == 0
