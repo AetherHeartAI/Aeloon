@@ -9,6 +9,7 @@ import os
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 import httpx
@@ -16,7 +17,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from aeloon.utils.helpers import detect_image_mime
 
-from .client import ILinkClient
+from .client import ILinkClient, build_base_info
 from .types import (
     CDNMediaTypeFile,
     CDNMediaTypeImage,
@@ -27,6 +28,7 @@ from .types import (
 )
 
 CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c"
+_STRICT_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 
 
 @dataclass(slots=True)
@@ -35,6 +37,62 @@ class UploadedFile:
     aes_key_hex: str
     file_size: int
     cipher_size: int
+
+
+def _format_ilink_error(action: str, response: dict[str, Any]) -> str:
+    ret = response.get("ret")
+    errcode = response.get("errcode")
+    errmsg = str(response.get("errmsg") or "").strip() or "<empty>"
+
+    details: list[str] = []
+    for key in ("retmsg", "message", "detail"):
+        value = str(response.get(key) or "").strip()
+        if value:
+            details.append(f"{key}={value}")
+
+    detail_suffix = f" {' '.join(details)}" if details else ""
+    return (
+        f"{action} failed"
+        f" ret={ret if ret is not None else '<missing>'}"
+        f" errcode={errcode if errcode is not None else '<missing>'}"
+        f" errmsg={errmsg}{detail_suffix}"
+    )
+
+
+def _resolve_upload_url(upload_response: dict[str, Any], file_key: str) -> str:
+    upload_full_url = str(upload_response.get("upload_full_url") or "").strip()
+    if upload_full_url:
+        return upload_full_url
+
+    upload_param = str(upload_response.get("upload_param") or "").strip()
+    if upload_param:
+        return (
+            f"{CDN_BASE_URL}/upload"
+            f"?encrypted_query_param={quote(upload_param)}&filekey={quote(file_key)}"
+        )
+
+    raise RuntimeError(
+        "CDN upload URL missing: getuploadurl returned neither upload_full_url nor upload_param"
+    )
+
+
+async def _upload_ciphertext(upload_url: str, encrypted: bytes) -> str:
+    async with httpx.AsyncClient(timeout=60.0) as http:
+        response = await http.post(
+            upload_url,
+            headers={"Content-Type": "application/octet-stream"},
+            content=encrypted,
+        )
+    if response.is_error:
+        body = response.text.strip().replace("\n", " ")[:200]
+        raise RuntimeError(
+            f"CDN upload failed status={response.status_code} body={body or '<empty>'}"
+        )
+
+    download_param = response.headers.get("X-Encrypted-Param", "")
+    if not download_param:
+        raise RuntimeError("CDN upload missing X-Encrypted-Param")
+    return download_param
 
 
 def _pkcs7_pad(data: bytes, block_size: int = 16) -> bytes:
@@ -71,11 +129,28 @@ def aes_key_to_base64(hex_key: str) -> str:
 def classify_media(path: str, mime: str | None = None) -> tuple[int, int]:
     mime = (mime or mimetypes.guess_type(path)[0] or "").lower()
     ext = Path(path).suffix.lower()
-    if mime.startswith("image/") or ext in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}:
+    if mime.startswith("image/") or ext in {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".bmp",
+    }:
         return CDNMediaTypeImage, ItemTypeImage
     if mime.startswith("video/") or ext in {".mp4", ".mov", ".webm", ".mkv", ".avi"}:
         return CDNMediaTypeVideo, ItemTypeVideo
     return CDNMediaTypeFile, ItemTypeFile
+
+
+def _classify_outbound_media(path: str, data: bytes) -> tuple[int, int]:
+    image_mime = detect_image_mime(data)
+    ext = Path(path).suffix.lower()
+    if ext in _STRICT_IMAGE_EXTENSIONS and not image_mime:
+        raise RuntimeError(
+            f"outbound image validation failed: {path} is not a supported image file"
+        )
+    return classify_media(path, image_mime)
 
 
 async def upload_file_to_cdn(
@@ -100,24 +175,14 @@ async def upload_file_to_cdn(
             "filesize": len(encrypted),
             "no_need_thumb": True,
             "aeskey": aes_key_hex,
-            "base_info": {},
+            "base_info": build_base_info(),
         }
     )
     if upload_response.get("ret", 0) != 0:
-        raise RuntimeError(f"get upload URL failed: {upload_response.get('errmsg', '')}")
+        raise RuntimeError(_format_ilink_error("get upload URL", upload_response))
 
-    upload_param = str(upload_response.get("upload_param") or "")
-    upload_url = f"{CDN_BASE_URL}/upload?encrypted_query_param={quote(upload_param)}&filekey={quote(file_key)}"
-    async with httpx.AsyncClient(timeout=60.0) as http:
-        response = await http.post(
-            upload_url,
-            headers={"Content-Type": "application/octet-stream"},
-            content=encrypted,
-        )
-        response.raise_for_status()
-    download_param = response.headers.get("X-Encrypted-Param", "")
-    if not download_param:
-        raise RuntimeError("CDN upload missing X-Encrypted-Param")
+    upload_url = _resolve_upload_url(upload_response, file_key)
+    download_param = await _upload_ciphertext(upload_url, encrypted)
 
     return UploadedFile(
         download_param=download_param,
@@ -185,7 +250,7 @@ async def send_text_message(
     response = await client.send_message(
         {
             "msg": {
-                "from_user_id": client.bot_id,
+                "from_user_id": "",
                 "to_user_id": to_user_id,
                 "client_id": str(uuid.uuid4()),
                 "message_type": 2,
@@ -193,11 +258,11 @@ async def send_text_message(
                 "item_list": [{"type": 1, "text_item": {"text": text}}],
                 "context_token": context_token,
             },
-            "base_info": {},
+            "base_info": build_base_info(),
         }
     )
     if response.get("ret", 0) != 0:
-        raise RuntimeError(f"send message failed: {response.get('errmsg', '')}")
+        raise RuntimeError(_format_ilink_error("send message", response))
 
 
 async def send_media_from_path(
@@ -207,7 +272,7 @@ async def send_media_from_path(
     context_token: str = "",
 ) -> None:
     data = Path(path).read_bytes()
-    media_type, item_type = classify_media(path)
+    media_type, item_type = _classify_outbound_media(path, data)
     uploaded = await upload_file_to_cdn(client, data, to_user_id, media_type)
     media = {
         "encrypt_query_param": uploaded.download_param,
@@ -216,7 +281,10 @@ async def send_media_from_path(
     }
 
     if item_type == ItemTypeImage:
-        item = {"type": item_type, "image_item": {"media": media, "mid_size": uploaded.cipher_size}}
+        item = {
+            "type": item_type,
+            "image_item": {"media": media, "mid_size": uploaded.cipher_size},
+        }
     elif item_type == ItemTypeVideo:
         item = {
             "type": item_type,
@@ -235,7 +303,7 @@ async def send_media_from_path(
     response = await client.send_message(
         {
             "msg": {
-                "from_user_id": client.bot_id,
+                "from_user_id": "",
                 "to_user_id": to_user_id,
                 "client_id": str(uuid.uuid4()),
                 "message_type": 2,
@@ -243,8 +311,8 @@ async def send_media_from_path(
                 "item_list": [item],
                 "context_token": context_token,
             },
-            "base_info": {},
+            "base_info": build_base_info(),
         }
     )
     if response.get("ret", 0) != 0:
-        raise RuntimeError(f"send media failed: {response.get('errmsg', '')}")
+        raise RuntimeError(_format_ilink_error("send media", response))

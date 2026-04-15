@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -45,6 +46,34 @@ async def test_on_message_publishes_text_inbound() -> None:
     assert inbound.content == "hello from wx"
     assert inbound.media == []
     assert inbound.metadata["context_token"] == "ctx-1"
+
+
+@pytest.mark.asyncio
+async def test_on_message_skips_duplicate_message_id() -> None:
+    bus = MessageBus()
+    channel = WeChatChannel(WeChatConfig(allow_from=["*"]), bus)
+
+    message = WeixinMessage(
+        from_user_id="wx-user",
+        to_user_id="wx-bot",
+        message_type=MessageTypeUser,
+        message_state=MessageStateFinish,
+        context_token="ctx-1",
+        message_id="msg-1",
+        item_list=[
+            MessageItem(type=ItemTypeText, text_item=TextItem(text="hello from wx")),
+        ],
+    )
+
+    await channel._on_message(message)
+    await channel._on_message(message)
+
+    inbound = await bus.consume_inbound()
+    assert inbound.content == "hello from wx"
+    assert inbound.metadata["message_id"] == "msg-1"
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(bus.consume_inbound(), timeout=0.05)
 
 
 @pytest.mark.asyncio
@@ -163,6 +192,41 @@ async def test_send_sends_text_and_existing_media(monkeypatch, tmp_path: Path) -
         ("text", "wx-user", "reply text|ctx-send"),
         ("media", "wx-user", f"{image_path}|ctx-send"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_send_filters_step_thinking_progress(monkeypatch) -> None:
+    bus = MessageBus()
+    channel = WeChatChannel(WeChatConfig(allow_from=["*"]), bus)
+    channel._client = SimpleNamespace()
+    channel._context_tokens["wx-user"] = "ctx-send"
+    channel._running = True
+
+    calls: list[tuple[str, str, str]] = []
+
+    async def _fake_send_text(_client, to_user_id: str, text: str, context_token: str) -> None:
+        calls.append(("text", to_user_id, f"{text}|{context_token}"))
+
+    monkeypatch.setattr("aeloon.channels.wechat.send_text_message", _fake_send_text)
+
+    await channel.send(
+        OutboundMessage(
+            channel="wechat",
+            chat_id="wx-user",
+            content="Thinking (step 2)...",
+            metadata={"_progress": True},
+        )
+    )
+    await channel.send(
+        OutboundMessage(
+            channel="wechat",
+            chat_id="wx-user",
+            content="Thinking...",
+            metadata={"_progress": True},
+        )
+    )
+
+    assert calls == [("text", "wx-user", "Thinking...|ctx-send")]
 
 
 @pytest.mark.asyncio

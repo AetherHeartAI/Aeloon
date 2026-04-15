@@ -36,6 +36,7 @@ class AgentDefaults(Base):
     # Legacy field kept for config compatibility.
     memory_window: int | None = Field(default=None, exclude=True)
     reasoning_effort: str | None = None  # low / medium / high
+    chat_timeout: int = 300  # Per-attempt LLM timeout in seconds.
     output_mode: str = "normal"  # normal / detail / debug / profile / deep-profile
     fast: bool = False  # Skip slower optional startup work.
 

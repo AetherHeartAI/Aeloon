@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import re
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +39,8 @@ from aeloon.core.config.schema import Base
 # WeChat iLink has no official per-message limit, but very long messages
 # often fail silently.  Split at this threshold to stay safe.
 _MAX_TEXT_LENGTH = 4000
+_THINKING_STEP_RE = re.compile(r"^Thinking \(step \d+\)\.\.\.$")
+_MAX_PROCESSED_MESSAGE_IDS = 1000
 
 
 class WeChatConfig(Base):
@@ -70,6 +74,7 @@ class WeChatChannel(BaseChannel):
         self._monitor_task: asyncio.Task | None = None
         self._stop_event = asyncio.Event()
         self._context_tokens: dict[str, str] = {}
+        self._processed_message_ids: OrderedDict[str, None] = OrderedDict()
 
     async def start(self) -> None:
         """Start the native WeChat monitor loop."""
@@ -118,6 +123,8 @@ class WeChatChannel(BaseChannel):
         if not self._client:
             logger.warning("WeChat client not initialized")
             return
+        if _should_skip_progress_text(msg):
+            return
 
         context_token = self._context_tokens.get(msg.chat_id, "")
         if msg.content and msg.content.strip():
@@ -135,6 +142,10 @@ class WeChatChannel(BaseChannel):
     async def _on_message(self, msg: WeixinMessage) -> None:
         """Handle one inbound WeChat message."""
         if msg.message_type != MessageTypeUser or msg.message_state != MessageStateFinish:
+            return
+
+        if msg.message_id and not self._remember_processed_message(msg.message_id):
+            logger.debug("WeChat duplicate inbound skipped: message_id={}", msg.message_id)
             return
 
         sender_id = msg.from_user_id
@@ -187,6 +198,7 @@ class WeChatChannel(BaseChannel):
             content=content,
             media=media_paths,
             metadata={
+                "message_id": msg.message_id,
                 "context_token": msg.context_token,
                 "item_types": item_types,
                 "from_user_id": msg.from_user_id,
@@ -201,6 +213,15 @@ class WeChatChannel(BaseChannel):
             path.mkdir(parents=True, exist_ok=True)
             return path
         return get_media_dir("wechat")
+
+    def _remember_processed_message(self, message_id: str) -> bool:
+        """Track processed inbound message ids and reject duplicates."""
+        if message_id in self._processed_message_ids:
+            return False
+        self._processed_message_ids[message_id] = None
+        while len(self._processed_message_ids) > _MAX_PROCESSED_MESSAGE_IDS:
+            self._processed_message_ids.popitem(last=False)
+        return True
 
 
 def _split_text(text: str, max_len: int) -> list[str]:
@@ -238,3 +259,12 @@ def _split_text(text: str, max_len: int) -> list[str]:
         remaining = remaining[max_len:]
 
     return chunks
+
+
+def _should_skip_progress_text(msg: OutboundMessage) -> bool:
+    """Filter redundant step-level thinking progress for WeChat users."""
+    metadata = msg.metadata or {}
+    if not metadata.get("_progress") or metadata.get("_tool_hint"):
+        return False
+    text = msg.content.strip() if msg.content else ""
+    return bool(_THINKING_STEP_RE.fullmatch(text))

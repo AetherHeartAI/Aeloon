@@ -20,6 +20,8 @@ def detect_image_mime(data: bytes) -> str | None:
         return "image/gif"
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
+    if data[:2] == b"BM":
+        return "image/bmp"
     return None
 
 
@@ -197,6 +199,7 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
     _write(None, workspace / "memory" / "HISTORY.md")
     (workspace / "skills").mkdir(exist_ok=True)
     (workspace / "compiled_skills").mkdir(exist_ok=True)
+    (workspace / "outputs").mkdir(exist_ok=True)
 
     if added and not silent:
         from rich.console import Console

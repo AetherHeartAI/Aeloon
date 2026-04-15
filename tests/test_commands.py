@@ -123,6 +123,7 @@ def test_onboard_fresh_install(mock_paths):
     assert (workspace_dir / "AGENTS.md").exists()
     assert (workspace_dir / "compiled_skills").exists()
     assert (workspace_dir / "memory" / "MEMORY.md").exists()
+    assert (workspace_dir / "outputs").exists()
     expected_workspace = Config().workspace_path
     assert mock_ws.call_args.args == (expected_workspace,)
 
@@ -139,6 +140,7 @@ def test_onboard_existing_config_refresh(mock_paths):
     assert "existing values preserved" in result.stdout
     assert workspace_dir.exists()
     assert (workspace_dir / "AGENTS.md").exists()
+    assert (workspace_dir / "outputs").exists()
 
 
 def test_onboard_existing_config_overwrite(mock_paths):
@@ -167,6 +169,7 @@ def test_onboard_existing_workspace_safe_create(mock_paths):
     assert "Created AGENTS.md" in result.stdout
     assert (workspace_dir / "AGENTS.md").exists()
     assert (workspace_dir / "compiled_skills").exists()
+    assert (workspace_dir / "outputs").exists()
 
 
 def test_onboard_help_shows_workspace_and_config_options():
@@ -197,6 +200,7 @@ def test_onboard_uses_explicit_config_and_workspace_paths(tmp_path, monkeypatch)
     assert saved.workspace_path == workspace_path
     assert (workspace_path / "AGENTS.md").exists()
     assert (workspace_path / "compiled_skills").exists()
+    assert (workspace_path / "outputs").exists()
     stripped_output = _strip_ansi(result.stdout)
     compact_output = stripped_output.replace("\n", "")
     resolved_config = str(config_path.resolve())

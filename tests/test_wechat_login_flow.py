@@ -111,6 +111,10 @@ async def test_wechat_login_checks_reload_result_before_success_message(
 async def test_wechat_logout_uses_configured_accounts_dir(monkeypatch, tmp_path) -> None:
     loop = _make_agent_loop()
     dispatcher = Dispatcher(loop)
+    dispatcher._channel_auth.gateway = SimpleNamespace(
+        stop=MagicMock(return_value=True),
+        is_current_process_gateway=lambda: False,
+    )
 
     monkeypatch.setattr(
         "aeloon.core.agent.channel_auth.ChannelAuthHelper._wechat_accounts_dir",
@@ -127,4 +131,5 @@ async def test_wechat_logout_uses_configured_accounts_dir(monkeypatch, tmp_path)
 
     has_valid.assert_called_once_with(str(tmp_path))
     remove_all.assert_called_once_with(str(tmp_path))
+    dispatcher._channel_auth.gateway.stop.assert_called_once_with(exclude_current=False)
     assert "Removed 1 credential" in response.content

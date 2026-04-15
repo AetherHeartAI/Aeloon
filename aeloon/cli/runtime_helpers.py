@@ -71,6 +71,7 @@ def make_provider(config: Config) -> Any:
         max_tokens=defaults.max_tokens,
         reasoning_effort=defaults.reasoning_effort,
     )
+    provider._CHAT_TIMEOUT_S = defaults.chat_timeout
     return provider
 
 

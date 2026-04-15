@@ -102,7 +102,15 @@ def create_builtin_catalog(
 
 def _apply_boot_defaults() -> None:
     """Apply lightweight environment defaults before runtime startup."""
-    if sys.platform == "win32" and sys.stdout.encoding != "utf-8":
+    if sys.platform == "win32":
+        # Set Windows console code page to UTF-8 so Chinese / CJK output stays readable.
+        try:
+            import ctypes
+
+            ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+            ctypes.windll.kernel32.SetConsoleCP(65001)
+        except Exception:
+            pass
         os.environ["PYTHONIOENCODING"] = "utf-8"
         try:
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")

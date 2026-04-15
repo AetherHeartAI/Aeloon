@@ -159,6 +159,8 @@ def resolve_initial_cli_state(session_id: str) -> tuple[dict[str, str], bool]:
 def build_bottom_toolbar(agent_loop, cli_channel: str, cli_chat_id: str) -> callable:
     """Build a prompt_toolkit bottom toolbar showing model/context usage."""
 
+    from aeloon.core.agent.channel_auth import GatewayManager
+
     def _toolbar() -> FormattedText:
         session_key = f"{cli_channel}:{cli_chat_id}"
         session = agent_loop.sessions.get_or_create(session_key)
@@ -166,23 +168,15 @@ def build_bottom_toolbar(agent_loop, cli_channel: str, cli_chat_id: str) -> call
         context_window = max(0, int(agent_loop.context_window_tokens))
         ratio = (estimated / context_window * 100) if context_window > 0 else 0.0
         model_value = str(agent_loop.model)
+        gateway_hint = " | Gateway: running | Ctrl+L: logs" if GatewayManager.is_running() else ""
+        context_text = f"Context: {estimated}/{context_window} ({ratio:.0f}%){gateway_hint}"
         width = shutil.get_terminal_size((80, 20)).columns
         min_spacing = 3
-        reserved = (
-            len("Model: ")
-            + len(f"Context: {estimated}/{context_window} ({ratio:.0f}%)")
-            + min_spacing
-        )
+        reserved = len("Model: ") + len(context_text) + min_spacing
         available_model = max(8, width - reserved)
         if len(model_value) > available_model:
             model_value = f"{model_value[: max(1, available_model - 1)]}…"
-        spacing = max(
-            3,
-            width
-            - len("Model: ")
-            - len(model_value)
-            - len(f"Context: {estimated}/{context_window} ({ratio:.0f}%)"),
-        )
+        spacing = max(3, width - len("Model: ") - len(model_value) - len(context_text))
         context_style = "bold ansired" if ratio >= 90 else "ansiyellow" if ratio >= 75 else ""
         return FormattedText(
             [
@@ -190,6 +184,7 @@ def build_bottom_toolbar(agent_loop, cli_channel: str, cli_chat_id: str) -> call
                 ("", f" {model_value}{' ' * spacing}"),
                 ("bold", "Context:"),
                 (context_style, f" {estimated}/{context_window} ({ratio:.0f}%)"),
+                ("dim", gateway_hint),
             ]
         )
 

@@ -3,6 +3,9 @@
 Plugins register policy callbacks during activate() to intercept operations
 like file writes and shell executions. When no policy is registered, tools
 behave exactly as before — zero overhead.
+
+Use ``set_file_policy(policy, append=True)`` to add a policy without
+replacing any existing one.
 """
 
 from __future__ import annotations
@@ -27,15 +30,47 @@ class ToolPolicyCallback(Protocol):
     async def after_operation(self, op: str, target: str, result: str, **kwargs: Any) -> str: ...
 
 
+class ChainedPolicy:
+    """Run multiple file policies in sequence."""
+
+    def __init__(self, *policies: ToolPolicyCallback) -> None:
+        self._policies: list[ToolPolicyCallback] = [p for p in policies if p is not None]
+
+    async def before_operation(self, op: str, target: str, **kwargs: Any) -> str | None:
+        for policy in self._policies:
+            veto = await policy.before_operation(op, target, **kwargs)
+            if veto is not None:
+                return veto
+        return None
+
+    async def after_operation(self, op: str, target: str, result: str, **kwargs: Any) -> str:
+        for policy in self._policies:
+            result = await policy.after_operation(op, target, result, **kwargs)
+        return result
+
+
 # Module-level registries — plugins set these during activate()
 _file_policy: ToolPolicyCallback | None = None
 _exec_policy: ToolPolicyCallback | None = None
 
 
-def set_file_policy(policy: ToolPolicyCallback | None) -> None:
+def set_file_policy(
+    policy: ToolPolicyCallback | None,
+    *,
+    append: bool = False,
+) -> None:
     """Register or clear the file operation policy callback."""
     global _file_policy
-    _file_policy = policy
+    if policy is None:
+        _file_policy = None
+        return
+    if append and _file_policy is not None:
+        if isinstance(_file_policy, ChainedPolicy):
+            _file_policy._policies.append(policy)
+        else:
+            _file_policy = ChainedPolicy(_file_policy, policy)
+    else:
+        _file_policy = policy
 
 
 def set_exec_policy(policy: ToolPolicyCallback | None) -> None:

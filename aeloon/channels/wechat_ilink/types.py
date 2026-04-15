@@ -144,6 +144,7 @@ class WeixinMessage:
     message_state: int
     item_list: list[MessageItem]
     context_token: str = ""
+    message_id: str = ""
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "WeixinMessage":
@@ -155,4 +156,12 @@ class WeixinMessage:
             message_state=int(data.get("message_state") or 0),
             item_list=[MessageItem.from_dict(item) for item in items if isinstance(item, dict)],
             context_token=str(data.get("context_token") or ""),
+            message_id=str(
+                data.get("message_id")
+                or data.get("msg_id")
+                or data.get("client_msg_id")
+                or data.get("client_id")
+                or data.get("id")
+                or ""
+            ),
         )

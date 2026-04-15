@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from loguru import logger
+
 from aeloon import __logo__, __version__
 from aeloon.cli.app import console
 from aeloon.cli.flows.helpers import boot_plugins
@@ -16,6 +18,29 @@ from aeloon.cli.runtime_helpers import (
     print_deprecated_memory_window_notice,
 )
 from aeloon.utils.helpers import sync_workspace_templates
+
+_GATEWAY_LOG_FORMAT = "{time:HH:mm:ss} | {level:<8} | {message}"
+_GATEWAY_LOG_SINK_ID: int | None = None
+
+
+def _configure_gateway_log_sink() -> Path:
+    """Configure the persistent gateway log sink."""
+    from aeloon.core.config.paths import get_gateway_log_path
+
+    global _GATEWAY_LOG_SINK_ID
+
+    logger.enable("aeloon")
+    if _GATEWAY_LOG_SINK_ID is not None:
+        logger.remove(_GATEWAY_LOG_SINK_ID)
+    log_path = get_gateway_log_path()
+    _GATEWAY_LOG_SINK_ID = logger.add(
+        str(log_path),
+        rotation="10 MB",
+        retention=3,
+        enqueue=True,
+        format=_GATEWAY_LOG_FORMAT,
+    )
+    return log_path
 
 
 def run_gateway(
@@ -39,12 +64,19 @@ def run_gateway(
     loaded_config = load_runtime_config(config, workspace)
     print_deprecated_memory_window_notice(loaded_config)
     actual_port = port if port is not None else loaded_config.gateway.port
+    log_path = _configure_gateway_log_sink()
 
     startup_workspace = Path(loaded_config.workspace_path).name or "workspace"
     console.print(compose_welcome_banner(startup_workspace, loaded_config.agents.defaults.model))
     console.print()
     console.print(
         f"{__logo__} Starting aeloon gateway version {__version__} on port {actual_port}..."
+    )
+    logger.info(
+        "Starting aeloon gateway version {} on port {} (log: {})",
+        __version__,
+        actual_port,
+        log_path,
     )
     sync_workspace_templates(loaded_config.workspace_path)
 
@@ -187,10 +219,12 @@ def run_gateway(
             await heartbeat.start()
             await asyncio.gather(agent.run(), channels.start_all())
         except KeyboardInterrupt:
+            logger.info("Gateway interrupted by keyboard signal")
             console.print("\nShutting down...")
         except Exception:
             import traceback
 
+            logger.exception("Gateway crashed unexpectedly")
             console.print("\n[red]Error: Gateway crashed unexpectedly[/red]")
             console.print(traceback.format_exc())
         finally:

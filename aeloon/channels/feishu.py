@@ -20,6 +20,7 @@ from aeloon.core.config.paths import get_media_dir
 from aeloon.core.config.schema import Base
 
 FEISHU_AVAILABLE = importlib.util.find_spec("lark_oapi") is not None
+_THINKING_STEP_RE = re.compile(r"^thinking\s*\(\s*step\s*\d+\s*\)\s*\.\.\.$", re.IGNORECASE)
 
 # Short labels for non-text message types.
 MSG_TYPE_MAP = {
@@ -28,6 +29,15 @@ MSG_TYPE_MAP = {
     "file": "[file]",
     "sticker": "[sticker]",
 }
+
+
+def _should_skip_progress_text(msg: OutboundMessage) -> bool:
+    """Drop step-level thinking updates."""
+    metadata = msg.metadata or {}
+    if not metadata.get("_progress") or metadata.get("_tool_hint"):
+        return False
+    text = msg.content.strip() if msg.content else ""
+    return bool(_THINKING_STEP_RE.search(text))
 
 
 def _extract_share_card_content(content_json: dict, msg_type: str) -> str:
@@ -272,6 +282,7 @@ class FeishuChannel(BaseChannel):
         self._send_locks: dict[str, asyncio.Lock] = {}
         self._recovery_locks: dict[str, asyncio.Lock] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._ws_loop: asyncio.AbstractEventLoop | None = None
 
     def _now_monotonic(self) -> float:
         """Wrap time.monotonic for easier tests."""
@@ -399,6 +410,7 @@ class FeishuChannel(BaseChannel):
 
             ws_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(ws_loop)
+            self._ws_loop = ws_loop
             # The SDK reads a module-level loop when starting the socket.
             _lark_ws_client.loop = ws_loop
             try:
@@ -410,6 +422,7 @@ class FeishuChannel(BaseChannel):
                     if self._running:
                         time.sleep(5)
             finally:
+                self._ws_loop = None
                 ws_loop.close()
 
         self._ws_thread = threading.Thread(target=run_ws, daemon=True)
@@ -425,6 +438,33 @@ class FeishuChannel(BaseChannel):
     async def stop(self) -> None:
         """Stop the Feishu channel."""
         self._running = False
+        ws_client = self._ws_client
+        ws_loop = self._ws_loop
+
+        if ws_client is not None:
+            try:
+                setattr(ws_client, "_auto_reconnect", False)
+            except Exception:
+                pass
+
+        if ws_client is not None and ws_loop is not None and ws_loop.is_running():
+            try:
+                future = asyncio.run_coroutine_threadsafe(ws_client._disconnect(), ws_loop)
+                future.result(timeout=5)
+            except Exception:
+                logger.opt(exception=True).debug("Feishu websocket disconnect raised during stop")
+            try:
+                ws_loop.call_soon_threadsafe(ws_loop.stop)
+            except Exception:
+                logger.opt(exception=True).debug("Feishu websocket loop stop raised during stop")
+
+        if self._ws_thread is not None and self._ws_thread.is_alive():
+            await asyncio.to_thread(self._ws_thread.join, 5)
+
+        self._ws_thread = None
+        self._ws_client = None
+        self._client = None
+        self._loop = None
         logger.info("Feishu bot stopped")
 
     def _is_bot_mentioned(self, message: Any) -> bool:
@@ -1255,6 +1295,9 @@ class FeishuChannel(BaseChannel):
             logger.warning("Feishu client not initialized")
             return
 
+        if _should_skip_progress_text(msg):
+            return
+
         if not self._should_send_progress(msg):
             return
 
@@ -1353,6 +1396,8 @@ class FeishuChannel(BaseChannel):
         Sync handler for incoming messages (called from WebSocket thread).
         Schedules async handling in the main event loop.
         """
+        if not self._running:
+            return
         if self._loop and self._loop.is_running():
             event = getattr(data, "event", None)
             message = getattr(event, "message", None)
@@ -1376,6 +1421,8 @@ class FeishuChannel(BaseChannel):
 
     async def _on_message(self, data: Any) -> None:
         """Handle incoming message from Feishu."""
+        if not self._running:
+            return
         try:
             event = data.event
             message = event.message
