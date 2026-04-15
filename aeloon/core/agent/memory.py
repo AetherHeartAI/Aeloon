@@ -30,7 +30,8 @@ _SAVE_MEMORY_TOOL = [
                     "history_entry": {
                         "type": "string",
                         "description": "A paragraph summarizing key events/decisions/topics. "
-                        "Start with [YYYY-MM-DD HH:MM]. Include detail useful for grep search.",
+                        "Start with [YYYY-MM-DD HH:MM]. Include detail useful for grep search. "
+                        "Include paths of any files created or modified during the conversation.",
                     },
                     "memory_update": {
                         "type": "string",
@@ -119,6 +120,7 @@ class MemoryStore:
         messages: list[dict],
         provider: LLMProvider,
         model: str,
+        output_summary: str = "",
     ) -> bool:
         """Consolidate the provided message chunk into MEMORY.md + HISTORY.md."""
         if not messages:
@@ -132,6 +134,9 @@ class MemoryStore:
 
 ## Conversation to Process
 {self._format_messages(messages)}"""
+
+        if output_summary:
+            prompt += f"\n\n## Files Created During This Conversation\n{output_summary}"
 
         chat_messages = [
             {
@@ -245,14 +250,28 @@ class MemoryConsolidator:
         self._build_messages = build_messages
         self._get_tool_definitions = get_tool_definitions
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+        self._output_manager: Any | None = None
+
+    def set_output_manager(self, manager: Any) -> None:
+        """Attach an OutputManager for output-aware consolidation."""
+        self._output_manager = manager
 
     def get_lock(self, session_key: str) -> asyncio.Lock:
         """Return the shared consolidation lock for one session."""
         return self._locks.setdefault(session_key, asyncio.Lock())
 
-    async def consolidate_messages(self, messages: list[dict[str, object]]) -> bool:
+    async def consolidate_messages(
+        self,
+        messages: list[dict[str, object]],
+        output_summary: str = "",
+    ) -> bool:
         """Archive a selected message chunk into persistent memory."""
-        return await self.store.consolidate(messages, self.provider, self.model)
+        return await self.store.consolidate(
+            messages,
+            self.provider,
+            self.model,
+            output_summary=output_summary,
+        )
 
     def pick_consolidation_boundary(
         self,
@@ -350,7 +369,10 @@ class MemoryConsolidator:
                     source,
                     len(chunk),
                 )
-                if not await self.consolidate_messages(chunk):
+                output_summary = ""
+                if self._output_manager is not None:
+                    output_summary = self._output_manager.build_output_summary(session=session)
+                if not await self.consolidate_messages(chunk, output_summary=output_summary):
                     return
                 session.last_consolidated = end_idx
                 self.sessions.save(session)

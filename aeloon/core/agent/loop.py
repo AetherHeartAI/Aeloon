@@ -15,6 +15,7 @@ from aeloon.core.agent.dispatcher import Dispatcher
 from aeloon.core.agent.kernel import run_agent_kernel
 from aeloon.core.agent.memory import MemoryConsolidator
 from aeloon.core.agent.middleware import ProfilerMiddleware
+from aeloon.core.agent.output_manager import OutputManager, OutputTracker
 from aeloon.core.agent.profiler import AgentProfiler, SpanCategory
 from aeloon.core.agent.skill_runtime import SkillBuildContext, SkillRuntime
 from aeloon.core.agent.subagent import SubagentManager
@@ -97,6 +98,8 @@ class AgentLoop:
         self.restrict_to_workspace = restrict_to_workspace
 
         self.context = ContextBuilder(workspace)
+        self.output_manager = OutputManager(workspace)
+        self.context.set_output_manager(self.output_manager)
         self.sessions = session_manager or SessionManager(workspace)
         self.tools = ToolRegistry()
         self.subagents = SubagentManager(
@@ -139,6 +142,11 @@ class AgentLoop:
             build_messages=self.context.build_messages,
             get_tool_definitions=self.tools.get_definitions,
         )
+        self.memory_consolidator.set_output_manager(self.output_manager)
+
+        from aeloon.core.agent.tools.policy import set_file_policy
+
+        set_file_policy(OutputTracker(self.output_manager), append=True)
         self.profiler = AgentProfiler()
         self.runtime_settings = RuntimeSettings(output_mode=output_mode, fast=fast)
         self.profiler.enabled = (

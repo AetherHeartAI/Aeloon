@@ -8,6 +8,7 @@ from importlib.resources import files as pkg_files
 from pathlib import Path
 
 from aeloon.core.agent.context import ContextBuilder
+from aeloon.core.agent.output_manager import OutputManager
 
 
 class _FakeDatetime(real_datetime):
@@ -71,3 +72,17 @@ def test_runtime_context_is_separate_untrusted_user_message(tmp_path) -> None:
     assert "Channel: cli" in user_content
     assert "Chat ID: direct" in user_content
     assert "Return exactly: OK" in user_content
+
+
+def test_system_prompt_includes_recent_outputs_when_manager_attached(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    builder = ContextBuilder(workspace)
+    manager = OutputManager(workspace)
+    builder.set_output_manager(manager)
+    manager.save_output("body", title="Notebook", category="docs")
+
+    prompt = builder.build_system_prompt()
+
+    assert "# Recent Outputs" in prompt
+    assert "outputs/docs/" in prompt
+    assert "Notebook" in prompt

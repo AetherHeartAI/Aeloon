@@ -91,6 +91,21 @@ def test_build_bottom_toolbar_includes_model_and_context(tmp_path) -> None:
     assert "123/" in rendered_text
 
 
+def test_build_bottom_toolbar_includes_gateway_hint_when_running(tmp_path, monkeypatch) -> None:
+    loop = _make_loop(tmp_path)
+    session = loop.sessions.get_or_create("cli:direct")
+    session.messages = [{"role": "user", "content": "hello"}]
+    loop.memory_consolidator.estimate_session_prompt_tokens = MagicMock(return_value=(123, "mock"))
+    monkeypatch.setattr("aeloon.core.agent.channel_auth.GatewayManager.is_running", lambda: True)
+
+    toolbar = agent_flow._build_bottom_toolbar(loop, "cli", "direct")
+    rendered = toolbar()
+    rendered_text = "".join(part[1] for part in rendered)
+
+    assert "Gateway: running" in rendered_text
+    assert "Ctrl+L: logs" in rendered_text
+
+
 def test_resolve_initial_cli_state_starts_fresh_for_default_session() -> None:
     state, start_fresh = agent_flow._resolve_initial_cli_state("cli:direct")
 

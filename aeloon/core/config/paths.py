@@ -34,6 +34,11 @@ def get_logs_dir() -> Path:
     return get_runtime_subdir("logs")
 
 
+def get_gateway_log_path() -> Path:
+    """Return the gateway log file path."""
+    return get_logs_dir() / "gateway.log"
+
+
 def get_workspace_path(workspace: str | None = None) -> Path:
     """Return the workspace path."""
     return Path(workspace).expanduser() if workspace else get_aeloon_home() / "workspace"

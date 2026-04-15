@@ -8,7 +8,7 @@ import json
 import os
 import re
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 from loguru import logger
@@ -138,6 +138,7 @@ class WebSearchTool(Tool):
 
         self.config = config if config is not None else WebSearchConfig()
         self.proxy = proxy
+        self._ddg_lock = asyncio.Lock()
 
     async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
         provider = self.config.provider.strip().lower() or "brave"
@@ -269,11 +270,55 @@ class WebSearchTool(Tool):
             return f"Error: {e}"
 
     async def _search_duckduckgo(self, query: str, n: int, **kwargs: Any) -> str:
+        http_result = await self._search_duckduckgo_lite(query, n, **kwargs)
+        if http_result is not None:
+            return http_result
+        return await self._search_duckduckgo_ddgs(query, n, **kwargs)
+
+    async def _search_duckduckgo_lite(self, query: str, n: int, **kwargs: Any) -> str | None:
+        """Search DuckDuckGo Lite with explicit HTTP timeouts."""
+        try:
+            timeout = httpx.Timeout(
+                connect=min(5.0, self.config.search_timeout_s),
+                read=self.config.search_timeout_s,
+                write=min(5.0, self.config.search_timeout_s),
+                pool=min(5.0, self.config.search_timeout_s),
+            )
+            async with httpx.AsyncClient(proxy=self.proxy, timeout=timeout) as client:
+                r = await client.post(
+                    "https://lite.duckduckgo.com/lite/",
+                    data={"q": query},
+                    headers={
+                        "User-Agent": USER_AGENT,
+                        "Content-Type": "application/x-www-form-urlencoded",
+                    },
+                )
+                r.raise_for_status()
+            items = self._parse_duckduckgo_lite_results(r.text, n)
+            if not items:
+                return None
+            return _format_results(query, items, n)
+        except httpx.TimeoutException:
+            await _progress_warning(
+                kwargs, _timeout_message("web search", f"DuckDuckGo Lite query '{query}'")
+            )
+            logger.warning("DuckDuckGo Lite search timed out for {}", query)
+            return None
+        except Exception as e:
+            logger.warning("DuckDuckGo Lite search failed for {}: {}", query, e)
+            return None
+
+    async def _search_duckduckgo_ddgs(self, query: str, n: int, **kwargs: Any) -> str:
+        """Fallback DuckDuckGo search via ddgs, guarded by a hard asyncio timeout."""
         try:
             from ddgs import DDGS
 
-            ddgs = DDGS(timeout=self.config.search_timeout_s)
-            raw = await asyncio.to_thread(ddgs.text, query, max_results=n)
+            async with self._ddg_lock:
+                ddgs = DDGS(timeout=self.config.search_timeout_s)
+                raw = await asyncio.wait_for(
+                    asyncio.to_thread(ddgs.text, query, max_results=n),
+                    timeout=self.config.search_timeout_s + 1.0,
+                )
             if not raw:
                 return f"No results for: {query}"
             items = [
@@ -285,6 +330,12 @@ class WebSearchTool(Tool):
                 for r in raw
             ]
             return _format_results(query, items, n)
+        except asyncio.TimeoutError:
+            await _progress_warning(
+                kwargs, _timeout_message("web search", f"DuckDuckGo query '{query}'")
+            )
+            logger.warning("DuckDuckGo search hard-timed out for {}", query)
+            return f"Error: DuckDuckGo search timed out for query '{query}'"
         except Exception as e:
             if "timeout" in str(e).lower():
                 await _progress_warning(
@@ -292,6 +343,35 @@ class WebSearchTool(Tool):
                 )
             logger.warning("DuckDuckGo search failed: {}", e)
             return f"Error: DuckDuckGo search failed ({e})"
+
+    def _parse_duckduckgo_lite_results(self, html_text: str, n: int) -> list[dict[str, str]]:
+        """Extract result rows from the DuckDuckGo Lite HTML response."""
+        items: list[dict[str, str]] = []
+        pattern = re.compile(
+            r"<a[^>]*href=['\"](?P<href>[^'\"]+)['\"][^>]*class=['\"]result-link['\"][^>]*>"
+            r"(?P<title>[\s\S]*?)</a>[\s\S]*?<td[^>]*class=['\"]result-snippet['\"][^>]*>"
+            r"(?P<snippet>[\s\S]*?)</td>",
+            re.I,
+        )
+        for match in pattern.finditer(html_text):
+            href = self._decode_duckduckgo_href(match.group("href"))
+            title = _normalize(_strip_tags(match.group("title")))
+            snippet = _normalize(_strip_tags(match.group("snippet")))
+            if not href or not title:
+                continue
+            items.append({"title": title, "url": href, "content": snippet})
+            if len(items) >= n:
+                break
+        return items
+
+    def _decode_duckduckgo_href(self, href: str) -> str:
+        """Decode DuckDuckGo redirect links into final destination URLs."""
+        parsed = urlparse(href)
+        if parsed.netloc.endswith("duckduckgo.com") and parsed.path.startswith("/l/"):
+            target = parse_qs(parsed.query).get("uddg", [""])[0]
+            if target:
+                return unquote(target)
+        return href
 
 
 class WebFetchTool(Tool):

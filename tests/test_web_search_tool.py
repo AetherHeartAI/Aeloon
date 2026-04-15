@@ -101,6 +101,11 @@ async def test_duckduckgo_search(monkeypatch):
     monkeypatch.setattr(web_mod, "DDGS", MockDDGS, raising=False)
 
     monkeypatch.setattr("ddgs.DDGS", MockDDGS)
+    monkeypatch.setattr(
+        WebSearchTool,
+        "_search_duckduckgo_lite",
+        staticmethod(lambda *args, **kwargs: __import__("asyncio").sleep(0, result=None)),
+    )
 
     tool = _tool(provider="duckduckgo")
     result = await tool.execute(query="hello")
@@ -120,6 +125,11 @@ async def test_brave_fallback_to_duckduckgo_when_no_key(monkeypatch):
 
     monkeypatch.setattr("ddgs.DDGS", MockDDGS)
     monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+    monkeypatch.setattr(
+        WebSearchTool,
+        "_search_duckduckgo_lite",
+        staticmethod(lambda *args, **kwargs: __import__("asyncio").sleep(0, result=None)),
+    )
 
     tool = _tool(provider="brave", api_key="")
     result = await tool.execute(query="test")
@@ -175,6 +185,11 @@ async def test_searxng_no_base_url_falls_back(monkeypatch):
 
     monkeypatch.setattr("ddgs.DDGS", MockDDGS)
     monkeypatch.delenv("SEARXNG_BASE_URL", raising=False)
+    monkeypatch.setattr(
+        WebSearchTool,
+        "_search_duckduckgo_lite",
+        staticmethod(lambda *args, **kwargs: __import__("asyncio").sleep(0, result=None)),
+    )
 
     tool = _tool(provider="searxng", base_url="")
     result = await tool.execute(query="test")
@@ -222,10 +237,15 @@ async def test_duckduckgo_timeout_emits_warning_progress(monkeypatch):
         warnings.append(message)
 
     monkeypatch.setattr("ddgs.DDGS", MockDDGS)
+    monkeypatch.setattr(
+        WebSearchTool,
+        "_search_duckduckgo_lite",
+        staticmethod(lambda *args, **kwargs: __import__("asyncio").sleep(0, result=None)),
+    )
 
     tool = _tool(provider="duckduckgo")
     result = await tool.execute(query="hello", on_progress=on_progress)
-    assert "DuckDuckGo search failed" in result
+    assert "DuckDuckGo search timed out" in result
     assert warnings == [
         "Warning: web search timed out for DuckDuckGo query 'hello'. Continuing with fallback or partial results."
     ]

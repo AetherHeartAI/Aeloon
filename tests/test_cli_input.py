@@ -1,7 +1,9 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.keys import Keys
 
 from aeloon.cli.flows import agent as agent_flow
 
@@ -59,6 +61,69 @@ def test_init_prompt_session_creates_session():
         _, kwargs = mock_session.call_args
         assert kwargs["multiline"] is False
         assert kwargs["enable_open_in_editor"] is False
+        assert kwargs["key_bindings"] is not None
+
+
+def test_build_interactive_key_bindings_ctrl_l_always_opens_logs() -> None:
+    bindings = agent_flow._build_interactive_key_bindings()
+    ctrl_l_binding = next(
+        binding for binding in bindings.bindings if binding.keys == (Keys.ControlL,)
+    )
+    app = MagicMock()
+
+    ctrl_l_binding.handler(MagicMock(app=app))
+
+    app.exit.assert_called_once_with(result=agent_flow._OPEN_GATEWAY_LOGS_SENTINEL)
+    assert all(binding.keys != (Keys.ControlI,) for binding in bindings.bindings)
+
+
+def test_read_tty_bytes_returns_pending_input(monkeypatch) -> None:
+    monkeypatch.setattr(agent_flow.select, "select", lambda *_args, **_kwargs: ([0], [], []))
+    monkeypatch.setattr(agent_flow.os, "read", lambda *_args, **_kwargs: b"\x0c")
+
+    assert agent_flow._read_tty_bytes(0, 0.1) == b"\x0c"
+
+
+@pytest.mark.asyncio
+async def test_watch_for_ctrl_l_sets_open_logs_event(monkeypatch) -> None:
+    open_logs_requested = asyncio.Event()
+    chunks = iter([b"\x0c"])
+
+    monkeypatch.setattr(agent_flow.os, "isatty", lambda _fd: True)
+    monkeypatch.setattr(agent_flow.sys.stdin, "fileno", lambda: 0)
+    monkeypatch.setattr(
+        agent_flow.asyncio, "to_thread", lambda func, *args: AsyncMock(return_value=func(*args))()
+    )
+
+    import termios
+
+    monkeypatch.setattr(termios, "tcgetattr", lambda _fd: [1])
+    monkeypatch.setattr(termios, "tcsetattr", lambda *_args: None)
+    monkeypatch.setattr("tty.setraw", lambda _fd: None)
+    monkeypatch.setattr(agent_flow, "_read_tty_bytes", lambda *_args, **_kwargs: next(chunks))
+
+    await agent_flow._watch_for_ctrl_l(open_logs_requested, poll_interval=0.01)
+
+    assert open_logs_requested.is_set()
+
+
+@pytest.mark.asyncio
+async def test_wait_for_turn_completion_exits_process_from_log_viewer_ctrl_c() -> None:
+    turn_done = asyncio.Event()
+    cancel_requested = asyncio.Event()
+    open_logs_requested = asyncio.Event()
+    open_logs_requested.set()
+
+    with patch("aeloon.cli.flows.agent._watch_for_ctrl_l", AsyncMock()):
+        with pytest.raises(KeyboardInterrupt):
+            await agent_flow._wait_for_turn_completion(
+                turn_done,
+                logs=False,
+                cancel_requested=cancel_requested,
+                cancel_current_turn=AsyncMock(),
+                open_logs_requested=open_logs_requested,
+                open_log_viewer=AsyncMock(return_value="exit_process"),
+            )
 
 
 def test_thinking_spinner_pause_stops_and_restarts():

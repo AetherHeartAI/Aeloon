@@ -4,11 +4,11 @@ import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from aeloon.channels.feishu import FeishuChannel, FeishuConfig
+from aeloon.channels.feishu import FeishuChannel, FeishuConfig, _should_skip_progress_text
 from aeloon.core.bus.events import OutboundMessage
 from aeloon.core.bus.queue import MessageBus
 
@@ -27,6 +27,7 @@ def _make_feishu_channel(reply_to_message: bool = False) -> FeishuChannel:
     )
     channel = FeishuChannel(config, MessageBus())
     channel._client = MagicMock()
+    channel._running = True
     # _loop is only used by the WebSocket thread bridge; not needed for unit tests
     channel._loop = None
     return channel
@@ -333,6 +334,91 @@ async def test_send_skips_reply_for_progress_messages() -> None:
     channel._client.im.v1.message.reply.assert_not_called()
 
 
+def test_should_skip_progress_text_only_for_step_thinking() -> None:
+    assert _should_skip_progress_text(
+        OutboundMessage(
+            channel="feishu",
+            chat_id="oc_abc",
+            content="Thinking (step 2)...",
+            metadata={"_progress": True},
+        )
+    )
+    assert _should_skip_progress_text(
+        OutboundMessage(
+            channel="feishu",
+            chat_id="oc_abc",
+            content="Thinking (step 12) ...",
+            metadata={"_progress": True},
+        )
+    )
+    assert not _should_skip_progress_text(
+        OutboundMessage(
+            channel="feishu",
+            chat_id="oc_abc",
+            content="Thinking...",
+            metadata={"_progress": True},
+        )
+    )
+
+
+def test_feishu_config_accepts_camel_case_credentials() -> None:
+    cfg = FeishuConfig.model_validate(
+        {
+            "enabled": True,
+            "appId": "cli_test",
+            "appSecret": "secret_test",
+        }
+    )
+
+    assert cfg.app_id == "cli_test"
+    assert cfg.app_secret == "secret_test"
+
+
+@pytest.mark.asyncio
+async def test_stop_disconnects_websocket_and_clears_runtime_handles() -> None:
+    channel = _make_feishu_channel()
+    ws_client = MagicMock()
+    ws_client._disconnect = AsyncMock(return_value=None)
+    ws_client._auto_reconnect = True
+    ws_loop = MagicMock()
+    ws_loop.is_running.return_value = True
+    channel._ws_client = ws_client
+    channel._ws_loop = ws_loop
+    channel._loop = asyncio.get_running_loop()
+
+    class _Thread:
+        def is_alive(self) -> bool:
+            return True
+
+        def join(self, _timeout: float) -> None:
+            return None
+
+    channel._ws_thread = _Thread()
+
+    class _Future:
+        def result(self, timeout: float | None = None) -> None:
+            return None
+
+    def _fake_run_coroutine_threadsafe(coro, loop):
+        assert loop is ws_loop
+        try:
+            coro.send(None)
+        except StopIteration:
+            pass
+        return _Future()
+
+    with patch("asyncio.run_coroutine_threadsafe", side_effect=_fake_run_coroutine_threadsafe):
+        await channel.stop()
+
+    assert ws_client._auto_reconnect is False
+    ws_client._disconnect.assert_awaited_once()
+    ws_loop.call_soon_threadsafe.assert_called_once()
+    assert channel._ws_client is None
+    assert channel._ws_thread is None
+    assert channel._client is None
+    assert channel._loop is None
+
+
 @pytest.mark.asyncio
 async def test_on_message_forwards_before_scheduling_reaction() -> None:
     channel = _make_feishu_channel()
@@ -515,3 +601,14 @@ async def test_on_message_no_extra_api_call_when_no_parent_id() -> None:
 
     channel._client.im.v1.message.get.assert_not_called()
     assert len(captured) == 1
+
+
+@pytest.mark.asyncio
+async def test_on_message_ignores_events_after_channel_stops() -> None:
+    channel = _make_feishu_channel()
+    channel._running = False
+
+    with patch.object(
+        channel, "_remember_processed_message", side_effect=AssertionError("should not run")
+    ):
+        await channel._on_message(_make_feishu_event())

@@ -61,6 +61,7 @@ from aeloon.cli.runtime_helpers import (
 from aeloon.utils.helpers import sync_workspace_templates
 
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
+_OPEN_GATEWAY_LOGS_SENTINEL = "\x00__logs__"
 
 _PROMPT_SESSION: PromptSession | None = None
 _SAVED_TERM_ATTRS: list[Any] | None = None
@@ -137,6 +138,72 @@ def _restore_terminal() -> None:
         pass
 
 
+def _read_tty_bytes(fd: int, timeout: float) -> bytes:
+    """Read pending stdin bytes from a TTY without blocking forever."""
+    try:
+        ready, _, _ = select.select([fd], [], [], timeout)
+    except Exception:
+        return b""
+    if not ready:
+        return b""
+    try:
+        return os.read(fd, 4096)
+    except Exception:
+        return b""
+
+
+async def _watch_for_ctrl_l(
+    open_logs_requested: asyncio.Event,
+    *,
+    poll_interval: float = 0.1,
+) -> None:
+    """Watch raw stdin for Ctrl+L during the thinking phase."""
+    try:
+        fd = sys.stdin.fileno()
+        if not os.isatty(fd):
+            return
+    except Exception:
+        return
+
+    saved_attrs = None
+    try:
+        import termios
+        import tty
+
+        saved_attrs = termios.tcgetattr(fd)
+        tty.setraw(fd)
+        while not open_logs_requested.is_set():
+            chunk = await asyncio.to_thread(_read_tty_bytes, fd, poll_interval)
+            if not chunk:
+                continue
+            if chunk[:1] == b"\x0c":
+                open_logs_requested.set()
+                return
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        return
+    finally:
+        if saved_attrs is not None:
+            try:
+                import termios
+
+                termios.tcsetattr(fd, termios.TCSADRAIN, saved_attrs)
+            except Exception:
+                pass
+
+
+def _build_interactive_key_bindings() -> KeyBindings:
+    """Build prompt key bindings for interactive mode."""
+    kb = KeyBindings()
+
+    def _open_logs(event) -> None:
+        event.app.exit(result=_OPEN_GATEWAY_LOGS_SENTINEL)
+
+    kb.add("c-l")(_open_logs)
+    return kb
+
+
 def _init_prompt_session(bottom_toolbar=None) -> None:
     """Create the prompt_toolkit session with persistent file history."""
     global _PROMPT_SESSION, _SAVED_TERM_ATTRS
@@ -159,6 +226,7 @@ def _init_prompt_session(bottom_toolbar=None) -> None:
         bottom_toolbar=bottom_toolbar,
         completer=_SlashCommandCompleter(),
         complete_while_typing=True,
+        key_bindings=_build_interactive_key_bindings(),
     )
 
 
@@ -188,9 +256,12 @@ async def _wait_for_turn_completion(
     status_mgr: Any | None = None,
     cancel_requested: asyncio.Event | None = None,
     cancel_current_turn: Any | None = None,
+    open_logs_requested: asyncio.Event | None = None,
+    open_log_viewer: Any | None = None,
 ) -> None:
     """Wait for one interactive turn without re-entering prompt_toolkit input mode."""
     thinking = _ThinkingSpinner(enabled=not logs)
+    ctrl_l_task: asyncio.Task[None] | None = None
     if status_mgr is not None:
         status_mgr.thinking = True
     try:
@@ -199,13 +270,17 @@ async def _wait_for_turn_completion(
                 await turn_done.wait()
                 return
 
+            if open_logs_requested is not None:
+                ctrl_l_task = asyncio.create_task(_watch_for_ctrl_l(open_logs_requested))
             while not turn_done.is_set():
                 turn_wait = asyncio.create_task(turn_done.wait())
                 cancel_wait = asyncio.create_task(cancel_requested.wait())
-                done, pending = await asyncio.wait(
-                    {turn_wait, cancel_wait},
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
+                waiters: set[asyncio.Task[bool]] = {turn_wait, cancel_wait}
+                logs_wait: asyncio.Task[bool] | None = None
+                if open_logs_requested is not None and open_log_viewer is not None:
+                    logs_wait = asyncio.create_task(open_logs_requested.wait())
+                    waiters.add(logs_wait)
+                done, pending = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
                 for task in pending:
                     task.cancel()
                 await asyncio.gather(*pending, return_exceptions=True)
@@ -214,9 +289,27 @@ async def _wait_for_turn_completion(
                     await turn_wait
                     break
 
+                if logs_wait is not None and logs_wait in done:
+                    open_logs_requested.clear()
+                    if ctrl_l_task is not None:
+                        ctrl_l_task.cancel()
+                        await asyncio.gather(ctrl_l_task, return_exceptions=True)
+                        ctrl_l_task = None
+                    viewer_result = await open_log_viewer()
+                    if viewer_result == "exit_process":
+                        raise KeyboardInterrupt
+                    if turn_done.is_set():
+                        break
+                    if open_logs_requested is not None:
+                        ctrl_l_task = asyncio.create_task(_watch_for_ctrl_l(open_logs_requested))
+                    continue
+
                 cancel_requested.clear()
                 await cancel_current_turn()
     finally:
+        if ctrl_l_task is not None:
+            ctrl_l_task.cancel()
+            await asyncio.gather(ctrl_l_task, return_exceptions=True)
         if status_mgr is not None:
             status_mgr.thinking = False
 
@@ -468,7 +561,7 @@ def run_agent(
             except (ValueError, OSError):
                 pass
 
-            async def _run_wechat_auth_once() -> None:
+            async def _run_channel_auth_once(channel_name: str) -> None:
                 from aeloon.core.bus.events import InboundMessage
 
                 effective_session_key = session_id
@@ -496,10 +589,19 @@ def run_agent(
                             if outbound.content:
                                 _print_agent_response(outbound.content, render_markdown=markdown)
                         text = (outbound.content or "").lower()
-                        if "please scan this qr code with wechat" in text:
+                        if (
+                            channel_name == "wechat"
+                            and "please scan this qr code with wechat" in text
+                        ):
                             saw_initial = True
                             continue
                         if (
+                            channel_name == "feishu"
+                            and "please scan this qr code with feishu" in text
+                        ):
+                            saw_initial = True
+                            continue
+                        if channel_name == "wechat" and (
                             "already logged in to wechat" in text
                             or "failed to initiate wechat login" in text
                             or "wechat login successful" in text
@@ -510,6 +612,19 @@ def run_agent(
                             or "not currently logged in to wechat" in text
                             or (saw_initial and "wechat channel is starting" in text)
                             or (saw_initial and "wechat credentials saved" in text)
+                        ):
+                            break
+                        if channel_name == "feishu" and (
+                            "already logged in to feishu" in text
+                            or "failed to initiate feishu login" in text
+                            or "feishu login successful" in text
+                            or "feishu login timed out" in text
+                            or "feishu login failed" in text
+                            or "feishu login was cancelled" in text
+                            or "feishu logged out" in text
+                            or "not currently logged in to feishu" in text
+                            or (saw_initial and "feishu channel is starting" in text)
+                            or (saw_initial and "feishu credentials saved" in text)
                         ):
                             break
                 finally:
@@ -523,7 +638,12 @@ def run_agent(
             try:
                 with thinking:
                     if message.strip() in {"/wechat login", "/wechat logout"}:
-                        await _run_wechat_auth_once()
+                        await _run_channel_auth_once("wechat")
+                    elif (
+                        message.strip().startswith("/feishu login")
+                        or message.strip() == "/feishu logout"
+                    ):
+                        await _run_channel_auth_once("feishu")
                     else:
                         response = await agent_loop.process_direct_full(
                             message, session_id, on_progress=_cli_progress
@@ -582,17 +702,22 @@ def run_agent(
     signal_state: dict[str, Any] = {
         "cancel_turn": None,
         "turn_active": False,
+        "in_log_viewer": False,
     }
 
     def _handle_signal(signum, frame):
         sig_name = signal.Signals(signum).name
         cancel_turn = signal_state.get("cancel_turn")
-        if signum == signal.SIGINT and signal_state.get("turn_active") and cancel_turn is not None:
+        if (
+            signum == signal.SIGINT
+            and signal_state.get("turn_active")
+            and cancel_turn is not None
+            and not signal_state.get("in_log_viewer")
+        ):
             cancel_turn()
             return
         _restore_terminal()
-        console.print(f"\nReceived {sig_name}, goodbye!")
-        sys.exit(0)
+        raise KeyboardInterrupt
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
@@ -615,6 +740,7 @@ def run_agent(
         active_turn_id: int | None = None
         turn_counter = 0
         cancel_requested = asyncio.Event()
+        open_logs_requested = asyncio.Event()
         loop = asyncio.get_running_loop()
         abandoned_turn_tasks: set[asyncio.Task[None]] = set()
 
@@ -653,6 +779,22 @@ def run_agent(
             return True
 
         signal_state["cancel_turn"] = lambda: loop.call_soon_threadsafe(cancel_requested.set)
+
+        async def _run_gateway_log_viewer_for_turn() -> str:
+            from aeloon.cli.interactive.log_viewer import (
+                LOG_VIEWER_RESULT_EXIT_PROCESS,
+                run_gateway_log_viewer,
+            )
+            from aeloon.core.config.paths import get_gateway_log_path
+
+            signal_state["in_log_viewer"] = True
+            try:
+                result = await run_gateway_log_viewer(get_gateway_log_path())
+            finally:
+                signal_state["in_log_viewer"] = False
+            if result == LOG_VIEWER_RESULT_EXIT_PROCESS:
+                return "exit_process"
+            return "close"
 
         async def _consume_outbound():
             while True:
@@ -714,6 +856,11 @@ def run_agent(
                 try:
                     _flush_pending_tty_input()
                     user_input = await _read_interactive_input_async()
+                    if user_input == _OPEN_GATEWAY_LOGS_SENTINEL:
+                        viewer_result = await _run_gateway_log_viewer_for_turn()
+                        if viewer_result == "exit_process":
+                            raise KeyboardInterrupt
+                        continue
                     command = user_input.strip()
                     if not command:
                         continue
@@ -766,6 +913,8 @@ def run_agent(
                         status_mgr=status_mgr,
                         cancel_requested=cancel_requested,
                         cancel_current_turn=_cancel_current_turn,
+                        open_logs_requested=open_logs_requested,
+                        open_log_viewer=_run_gateway_log_viewer_for_turn,
                     )
                     signal_state["turn_active"] = False
                     active_turn_id = None

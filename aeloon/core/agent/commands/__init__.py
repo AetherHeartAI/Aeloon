@@ -92,6 +92,10 @@ class CommandEnv:
         return getattr(self._agent_loop, "bus", None)
 
     @property
+    def output_manager(self) -> Any:
+        return getattr(self._agent_loop, "output_manager", None)
+
+    @property
     def schedule_background(self) -> Callable[[Coroutine[Any, Any, Any]], Any]:
         return getattr(self._agent_loop, "_schedule_background", _default_schedule_background)
 
@@ -119,7 +123,7 @@ def _modules() -> tuple[Any, ...]:
     """Load built-in command modules in registration order."""
     return tuple(
         import_module(f"{__name__}.{module_name}")
-        for module_name in ("info", "session", "settings", "channel", "plugin_admin")
+        for module_name in ("info", "session", "settings", "channel", "plugin_admin", "outputs")
     )
 
 

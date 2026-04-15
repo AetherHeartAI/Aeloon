@@ -15,6 +15,7 @@ def test_builtin_catalog_includes_expected_slash_commands() -> None:
     slash_commands = catalog.slash_commands()
 
     assert ("/help", "Show available commands") in slash_commands
+    assert ("/outputs", "List recent output artifacts") in slash_commands
     assert ("/channel", "Manage one channel.") in slash_commands
     assert ("/channel wechat status", "Manage one channel.") in slash_commands
     assert ("/plugin", "Manage plugins.") in slash_commands

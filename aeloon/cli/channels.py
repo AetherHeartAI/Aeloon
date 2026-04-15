@@ -213,7 +213,7 @@ async def _run_channel_auth_cli(
     if name == "wechat":
         response = await helper.handle_wechat_command(request, args, agent_loop)
     elif name == "feishu":
-        response = await helper.handle_feishu_command(request, args)
+        response = await helper.handle_feishu_command(request, args, agent_loop)
     else:
         raise typer.BadParameter(f"Unsupported channel action target: {name}")
 
@@ -221,6 +221,13 @@ async def _run_channel_auth_cli(
 
     if name == "wechat" and args and args[0] == "login":
         task = helper.wechat._login_tasks.get((request.channel, request.chat_id))
+        if task is not None:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+    elif name == "feishu" and args and args[0] == "login":
+        task = helper.feishu._login_tasks.get((request.channel, request.chat_id))
         if task is not None:
             try:
                 await task
