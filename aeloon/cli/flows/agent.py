@@ -706,7 +706,6 @@ def run_agent(
     }
 
     def _handle_signal(signum, frame):
-        sig_name = signal.Signals(signum).name
         cancel_turn = signal_state.get("cancel_turn")
         if (
             signum == signal.SIGINT
