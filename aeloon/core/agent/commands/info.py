@@ -40,7 +40,9 @@ async def handle_status(ctx: CommandContext, _args_str: str) -> str | None:
     try:
         session = ctx.sessions.get_or_create(ctx.session_key)
         memory = ctx.memory
-        estimated, _source = memory.estimate_session_prompt_tokens(session) if memory else (0, "none")
+        estimated, _source = (
+            memory.estimate_session_prompt_tokens(session) if memory else (0, "none")
+        )
     except Exception:
         estimated = 0
     context_total = max(0, int(ctx.context_window_tokens))

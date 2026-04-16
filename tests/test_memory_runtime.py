@@ -486,6 +486,8 @@ def test_memory_runtime_forwards_output_manager_to_local_memory(tmp_path: Path) 
     runtime.set_output_manager(manager)
 
     assert seen == [manager]
+
+
 def test_agent_loop_uses_memory_runtime_with_local_memory(tmp_path: Path) -> None:
     from aeloon.core.agent.loop import AgentLoop
     from aeloon.core.bus.queue import MessageBus

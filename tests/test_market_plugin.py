@@ -433,9 +433,8 @@ class TestRuntimeConfigCleanup:
 
     def test_inject_plugin_config_from_model(self) -> None:
         """inject_plugin_config accepts a Pydantic model."""
-        from aeloon.plugins.MarketResearch.config import MarketConfig
-
         from aeloon.plugins.MarketResearch import runtime_config
+        from aeloon.plugins.MarketResearch.config import MarketConfig
 
         cfg = MarketConfig(enabled=True)
         runtime_config.inject_plugin_config(cfg)

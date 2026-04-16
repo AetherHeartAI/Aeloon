@@ -207,9 +207,7 @@ async def handle_sessions(ctx: CommandContext, args_str: str) -> str | None:
     if len(args) == 1 and service is not None:
         return await _resume_archived_session(ctx, identifier=args[0], service=service)
 
-    return (
-        "Usage: /resume | /resume switch <session-id-or-title> | /sessions | /sessions switch <session-id-or-title>"
-    )
+    return "Usage: /resume | /resume switch <session-id-or-title> | /sessions | /sessions switch <session-id-or-title>"
 
 
 @slash_command(
