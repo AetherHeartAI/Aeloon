@@ -15,6 +15,7 @@ FROM_SOURCE=false
 SOURCE_DIR=""
 NO_MODIFY_PATH=false
 OFFLINE=false
+FORCE_REINSTALL=false
 
 LOCAL_WHEEL_FILE=""
 LOCAL_WHEELHOUSE_DIR=""
@@ -276,6 +277,7 @@ Usage:
 Options:
   --version <ref>       Install from a specific git ref (tag / branch / commit)
   --from-source [DIR]   Install from a local checkout, or the given directory
+  --reinstall           Reinstall or upgrade Aeloon even if it is already installed
   --offline             Require local wheel artifacts; do not use the network for packages
   --no-modify-path      Do not modify shell profile files
   -h, --help            Show this help
@@ -309,6 +311,10 @@ while [ $# -gt 0 ]; do
             ;;
         --offline)
             OFFLINE=true
+            shift
+            ;;
+        --reinstall)
+            FORCE_REINSTALL=true
             shift
             ;;
         --no-modify-path)
@@ -417,13 +423,19 @@ resolve_install_target() {
 
 create_venv() {
     local -a venv_args
+    if [ -x "$AELOON_VENV/bin/python" ]; then
+        info "Existing environment found, reusing it..."
+        info "Python environment ready: $($AELOON_VENV/bin/python --version)"
+        return
+    fi
+
     if [ -d "$AELOON_VENV" ]; then
-        info "Existing environment found, upgrading it..."
+        warn "Existing environment directory found without a usable Python executable; attempting to complete it."
     else
         info "Creating Python ${PYTHON_VERSION} environment..."
     fi
 
-    venv_args=(venv "$AELOON_VENV" --python "$PYTHON_VERSION" --quiet)
+    venv_args=(venv "$AELOON_VENV" --python "$PYTHON_VERSION" --quiet --allow-existing)
     if [ "$OFFLINE" = true ]; then
         venv_args+=(--no-python-downloads)
     fi
@@ -436,6 +448,15 @@ create_venv() {
 install_aeloon() {
     local target
     local -a install_args
+
+    if [ "$FORCE_REINSTALL" = false ] \
+        && [ -x "$AELOON_VENV/bin/aeloon" ] \
+        && "$AELOON_VENV/bin/python" -c "import aeloon" >/dev/null 2>&1; then
+        info "Existing Aeloon install found, reusing it."
+        info "Pass --reinstall to upgrade or reinstall the package."
+        return
+    fi
+
     target="$(resolve_install_target)"
     install_args=(install --python "$AELOON_VENV/bin/python" --upgrade)
 
@@ -692,66 +713,39 @@ choose_provider() {
 }
 
 collect_provider_settings() {
-    local detection_json
-    local default_base
+    info "Starting interactive provider setup..."
+    "$AELOON_VENV/bin/aeloon" provider setup --config "$CONFIG_PATH"
+    sync_selected_provider_from_config
+}
 
-    choose_provider
+sync_selected_provider_from_config() {
+    local selected_fields=()
 
-    case "$SELECTED_PROVIDER" in
-        default)
-            USED_BUNDLED_DEFAULT=true
-            SELECTED_PROVIDER="openrouter"
-            PROVIDER_API_KEY="$DEFAULT_PROVIDER_KEY"
-            SELECTED_API_BASE="$(installer_python detect-models --provider openrouter --api-key "" --api-base "" | "$AELOON_VENV/bin/python" -c 'import json,sys; data=json.load(sys.stdin); print(data.get("resolved_api_base", ""))')"
-            detection_json="$(detect_models_json "$SELECTED_PROVIDER" "$PROVIDER_API_KEY" "$SELECTED_API_BASE")"
-            SELECTED_MODEL="$(choose_model_from_detection "$detection_json" true "Model")"
-            ;;
-        openrouter)
-            PROVIDER_API_KEY="$(prompt_secret "API key for $SELECTED_PROVIDER")"
-            default_base="$(installer_python detect-models --provider "$SELECTED_PROVIDER" --api-key "" --api-base "" | "$AELOON_VENV/bin/python" -c 'import json,sys; data=json.load(sys.stdin); print(data.get("resolved_api_base", ""))')"
-            if [ -n "$default_base" ]; then
-                SELECTED_API_BASE="$(prompt_optional_api_base "$default_base")"
-            fi
-            ;;
-        anthropic|openai|deepseek|gemini|zhipu|dashscope|moonshot|minimax|groq|aihubmix|siliconflow|volcengine|volcengine_coding_plan|byteplus|byteplus_coding_plan)
-            PROVIDER_API_KEY="$(prompt_secret "API key for $SELECTED_PROVIDER")"
-            default_base="$(installer_python detect-models --provider "$SELECTED_PROVIDER" --api-key "" --api-base "" | "$AELOON_VENV/bin/python" -c 'import json,sys; data=json.load(sys.stdin); print(data.get("resolved_api_base", ""))')"
-            if [ -n "$default_base" ]; then
-                SELECTED_API_BASE="$(prompt_optional_api_base "$default_base")"
-            fi
-            ;;
-        custom|vllm)
-            default_base="$(prompt_line "API base URL" "http://127.0.0.1:8000/v1")"
-            SELECTED_API_BASE="$default_base"
-            PROVIDER_API_KEY="$(prompt_secret "API key (leave blank if not needed)")"
-            ;;
-        azure_openai)
-            default_base="$(prompt_line "Azure OpenAI endpoint" "https://your-resource.openai.azure.com")"
-            SELECTED_API_BASE="$default_base"
-            PROVIDER_API_KEY="$(prompt_secret "Azure OpenAI API key")"
-            ;;
-        ollama)
-            SELECTED_API_BASE="$(prompt_line "Ollama API base URL" "http://127.0.0.1:11434")"
-            ;;
-        openai_codex)
-            warn "OpenAI Codex uses OAuth. Run 'aeloon provider login openai-codex' after install."
-            ;;
-        github_copilot)
-            warn "GitHub Copilot uses OAuth. Run 'aeloon provider login github-copilot' after install."
-            ;;
-    esac
+    while IFS= read -r line; do
+        selected_fields+=("$line")
+    done < <(CONFIG_PATH="$CONFIG_PATH" "$AELOON_VENV/bin/python" - <<'PY'
+import json
+import os
+from pathlib import Path
 
-    if [ "$USED_BUNDLED_DEFAULT" = false ]; then
-        detection_json="$(detect_models_json "$SELECTED_PROVIDER" "$PROVIDER_API_KEY" "$SELECTED_API_BASE")"
-        SELECTED_MODEL="$(choose_model_from_detection "$detection_json" false "Model")"
-    fi
+config_path = Path(os.environ["CONFIG_PATH"]).expanduser()
+data = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+agents = data.get("agents", {}).get("defaults", {})
+provider = (agents.get("provider") or "").strip()
+providers = data.get("providers", {})
+provider_cfg = providers.get(provider, {}) if provider else {}
+print(provider)
+print((agents.get("model") or "").strip())
+print(provider_cfg.get("apiKey") or "")
+print(provider_cfg.get("apiBase") or "")
+PY
 
-    if [ -z "$SELECTED_MODEL" ]; then
-        die "Model cannot be empty"
-    fi
-    if [ "$SELECTED_PROVIDER" = "openrouter" ] && [ -z "$PROVIDER_API_KEY" ]; then
-        warn "OpenRouter API key is empty. Aeloon will not be able to answer until you add one."
-    fi
+)
+
+    SELECTED_PROVIDER="${selected_fields[0]:-}"
+    SELECTED_MODEL="${selected_fields[1]:-}"
+    PROVIDER_API_KEY="${selected_fields[2]:-}"
+    SELECTED_API_BASE="${selected_fields[3]:-}"
 }
 
 require_allow_from() {
@@ -912,12 +906,8 @@ run_interactive_setup() {
     if ! have_prompt_tty; then
         warn "No TTY available for prompts. Applying the default OpenRouter free-model setup."
         USED_BUNDLED_DEFAULT=true
-        SELECTED_PROVIDER="openrouter"
-        PROVIDER_API_KEY="$DEFAULT_PROVIDER_KEY"
-        SELECTED_API_BASE="$(installer_python detect-models --provider openrouter --api-key "" --api-base "" | "$AELOON_VENV/bin/python" -c 'import json,sys; data=json.load(sys.stdin); print(data.get("resolved_api_base", ""))')"
-        detection_json="$(detect_models_json "$SELECTED_PROVIDER" "$PROVIDER_API_KEY" "$SELECTED_API_BASE")"
-        SELECTED_MODEL="$(suggest_free_model_from_detection "$detection_json")"
-        [ -n "$SELECTED_MODEL" ] || die "No fully free OpenRouter models were detected for the default setup."
+        "$AELOON_VENV/bin/aeloon" provider setup --config "$CONFIG_PATH" --bootstrap-default
+        sync_selected_provider_from_config
         apply_config_updates
         INTERACTIVE_SETUP_DONE=true
         return
