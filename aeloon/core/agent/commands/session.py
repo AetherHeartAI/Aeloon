@@ -9,6 +9,9 @@ from aeloon.core.bus.events import InboundMessage, OutboundMessage
 SPECS: tuple[CommandSpec, ...] = (
     CommandSpec(name="new", help="Start a new conversation", slash_path=("new",)),
     CommandSpec(
+        name="compact", help="Compact the current session context", slash_path=("compact",)
+    ),
+    CommandSpec(
         name="resume",
         help="Resume a saved session",
         slash_path=("resume",),
@@ -38,6 +41,42 @@ async def handle_new(env: CommandEnv, msg: InboundMessage, _args_str: str) -> Ou
         channel=msg.channel,
         chat_id=msg.chat_id,
         content="New session started.",
+    )
+
+
+async def handle_compact(env: CommandEnv, msg: InboundMessage, args_str: str) -> OutboundMessage:
+    """Archive unconsolidated history so the next turn starts from compacted context."""
+    if args_str.strip():
+        return OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content="Usage: /compact",
+        )
+
+    session = env.sessions.get_or_create(msg.session_key)
+    snapshot = session.messages[session.last_consolidated :]
+    if not snapshot:
+        return OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content="Session is already compacted.",
+        )
+
+    archived = await env.memory_consolidator.archive_messages(snapshot)
+    if not archived:
+        return OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content="Failed to compact the current session.",
+        )
+
+    session.last_consolidated = len(session.messages)
+    env.sessions.save(session)
+
+    return OutboundMessage(
+        channel=msg.channel,
+        chat_id=msg.chat_id,
+        content=f"Compacted {len(snapshot)} messages from the current session.",
     )
 
 
@@ -104,6 +143,7 @@ async def handle_sessions(env: CommandEnv, msg: InboundMessage, args_str: str) -
 
 
 HANDLERS: BuiltinHandlerMap = {
+    "compact": handle_compact,
     "new": handle_new,
     "resume": handle_sessions,
     "sessions": handle_sessions,
