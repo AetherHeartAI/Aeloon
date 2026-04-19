@@ -353,6 +353,55 @@ async def test_resume_command_lists_current_session(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_compact_archives_unconsolidated_session_messages(tmp_path) -> None:
+    loop = _make_loop(tmp_path)
+    loop.memory_consolidator.archive_messages = AsyncMock(return_value=True)
+    session = loop.sessions.get_or_create("cli:direct")
+    session.add_message("user", "hello")
+    session.add_message("assistant", "hi")
+    loop.sessions.save(session)
+
+    response = await loop._process_message(
+        InboundMessage(channel="cli", sender_id="u", chat_id="direct", content="/compact")
+    )
+
+    assert response is not None
+    assert response.content == "Compacted 2 messages from the current session."
+    loop.memory_consolidator.archive_messages.assert_awaited_once()
+    archived_messages = loop.memory_consolidator.archive_messages.await_args.args[0]
+    assert [message["content"] for message in archived_messages] == ["hello", "hi"]
+    assert loop.sessions.get_or_create("cli:direct").last_consolidated == 2
+
+
+@pytest.mark.asyncio
+async def test_compact_reports_already_compacted_session(tmp_path) -> None:
+    loop = _make_loop(tmp_path)
+    session = loop.sessions.get_or_create("cli:direct")
+    session.add_message("user", "hello")
+    session.last_consolidated = len(session.messages)
+    loop.sessions.save(session)
+
+    response = await loop._process_message(
+        InboundMessage(channel="cli", sender_id="u", chat_id="direct", content="/compact")
+    )
+
+    assert response is not None
+    assert response.content == "Session is already compacted."
+
+
+@pytest.mark.asyncio
+async def test_compact_rejects_arguments(tmp_path) -> None:
+    loop = _make_loop(tmp_path)
+
+    response = await loop._process_message(
+        InboundMessage(channel="cli", sender_id="u", chat_id="direct", content="/compact now")
+    )
+
+    assert response is not None
+    assert response.content == "Usage: /compact"
+
+
+@pytest.mark.asyncio
 async def test_sessions_switch_returns_switch_metadata(tmp_path) -> None:
     loop = _make_loop(tmp_path)
     target = loop.sessions.get_or_create("cli:other")
