@@ -132,6 +132,37 @@ async def handle_new(ctx: CommandContext, _args_str: str) -> str | None:
 
 
 @slash_command(
+    name="compact",
+    help="Compact the current session context",
+    slash_path=("compact",),
+)
+async def handle_compact(ctx: CommandContext, args_str: str) -> str | None:
+    """Shrink current context without ending the active session."""
+    if args_str.strip():
+        return "Usage: /compact"
+
+    session = ctx.sessions.get_or_create(ctx.session_key)
+    memory = ctx.memory
+    if memory is None:
+        raise RuntimeError("Memory manager is not available.")
+
+    start_index = memory.pending_start_index(session)
+    snapshot = list(session.messages[start_index:])
+    if not snapshot:
+        return "Session is already compacted."
+
+    await memory.flush(
+        session=session,
+        pending_messages=snapshot,
+        reason="compact",
+    )
+    session.last_compacted = len(session.messages)
+    ctx.sessions.save(session)
+
+    return f"Compacted {len(snapshot)} messages from the current session."
+
+
+@slash_command(
     name="sessions",
     help="List or switch saved sessions",
     slash_path=("sessions",),

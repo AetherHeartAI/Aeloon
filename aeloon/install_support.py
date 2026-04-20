@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
+import time
+from pathlib import Path
 from typing import Any
 
 import httpx
 
 from aeloon.providers.registry import PROVIDERS, find_by_name
+
+_MODEL_CACHE_TTL_S = 60 * 60 * 6
 
 _DEFAULT_API_BASES: dict[str, str] = {
     "anthropic": "https://api.anthropic.com",
@@ -143,6 +148,40 @@ def _dedupe_keep_order(items: list[str]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def _model_cache_path(provider: str, api_base: str, api_key: str | None) -> Path:
+    from aeloon.core.config.loader import get_aeloon_home
+
+    raw = f"{provider}|{api_base}|{api_key or ''}"
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+    return get_aeloon_home() / "cache" / "provider-models" / f"{provider}-{digest}.json"
+
+
+def _load_model_cache(provider: str, api_base: str, api_key: str | None) -> dict[str, Any] | None:
+    path = _model_cache_path(provider, api_base, api_key)
+    if not path.exists():
+        return None
+    if time.time() - path.stat().st_mtime > _MODEL_CACHE_TTL_S:
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _save_model_cache(
+    provider: str, api_base: str, api_key: str | None, result: dict[str, Any]
+) -> None:
+    path = _model_cache_path(provider, api_base, api_key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(result, fh, ensure_ascii=False)
+    except OSError:
+        return
 
 
 def _parse_model_ids(payload: Any) -> list[str]:
@@ -294,6 +333,14 @@ async def detect_models(
     resolved_base = resolve_api_base(name, api_base)
     recommended = recommended_model(name)
 
+    cached = _load_model_cache(name, resolved_base, api_key)
+    if cached is not None:
+        cached.setdefault("provider", name)
+        cached.setdefault("recommended", recommended)
+        cached.setdefault("resolved_api_base", resolved_base)
+        cached["cache_hit"] = True
+        return cached
+
     if name in {"openai_codex", "github_copilot"}:
         return {
             "provider": name,
@@ -329,14 +376,17 @@ async def detect_models(
             }
 
     models = _dedupe_keep_order(models)
-    return {
+    result = {
         "provider": name,
         "recommended": recommended,
         "resolved_api_base": resolved_base,
         "detected": bool(models),
-        "models": models[:40],
+        "models": models,
         "message": "" if models else "No models detected; using recommended default.",
     }
+    if models:
+        _save_model_cache(name, resolved_base, api_key, result)
+    return result
 
 
 def _build_parser() -> argparse.ArgumentParser:

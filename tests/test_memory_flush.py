@@ -99,7 +99,9 @@ async def test_local_memory_runtime_calls_flush_before_compaction(tmp_path: Path
             flush_before_loss=_flush_before_loss,
         ),
     )
-    runtime.consolidate_messages = lambda messages: __import__("asyncio").sleep(0, result=True)  # type: ignore[assignment,method-assign]
+    runtime.consolidate_messages = (  # type: ignore[assignment,method-assign]
+        lambda messages, output_summary="": __import__("asyncio").sleep(0, result=True)
+    )
     runtime.estimate_session_prompt_tokens = lambda _session: (10, "test")  # type: ignore[assignment,method-assign]
     runtime.pick_compaction_boundary = lambda _session, _tokens: (2, 5)  # type: ignore[assignment,method-assign]
     session = Session(key="cli:test")
@@ -122,21 +124,26 @@ async def test_local_memory_runtime_calls_flush_before_compaction(tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_cli_and_gateway_flush_helpers_flush_pending_messages(tmp_path: Path) -> None:
-    from aeloon.cli.flows.agent import _flush_session_before_shutdown
+    from aeloon.cli.flows.agent import _finalize_session_before_shutdown
     from aeloon.cli.flows.gateway import _flush_cached_sessions_before_shutdown
     from aeloon.core.session.manager import SessionManager
 
     class _Memory:
         def __init__(self) -> None:
-            self.calls: list[tuple[str, int, str]] = []
+            self.calls: list[tuple[str, str, int, str]] = []
 
         def pending_start_index(self, _session: Session) -> int:
             return 1
 
+        async def finalize_session(
+            self, *, session: Session, pending_messages, reason: str | None = None
+        ) -> None:
+            self.calls.append(("finalize", session.key, len(pending_messages), str(reason)))
+
         async def flush(
             self, *, session: Session, pending_messages, reason: str | None = None
         ) -> None:
-            self.calls.append((session.key, len(pending_messages), str(reason)))
+            self.calls.append(("flush", session.key, len(pending_messages), str(reason)))
 
     class _Loop:
         def __init__(self) -> None:
@@ -151,10 +158,10 @@ async def test_cli_and_gateway_flush_helpers_flush_pending_messages(tmp_path: Pa
     ]
     loop.sessions.save(session)
 
-    await _flush_session_before_shutdown(loop, "cli:test", reason="cli-shutdown")
+    await _finalize_session_before_shutdown(loop, "cli:test", reason="cli-shutdown")
     await _flush_cached_sessions_before_shutdown(loop, reason="gateway-shutdown")
 
     assert loop.memory.calls == [
-        ("cli:test", 1, "cli-shutdown"),
-        ("cli:test", 1, "gateway-shutdown"),
+        ("finalize", "cli:test", 1, "cli-shutdown"),
+        ("flush", "cli:test", 1, "gateway-shutdown"),
     ]
