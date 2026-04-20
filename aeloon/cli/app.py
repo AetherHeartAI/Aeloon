@@ -5,9 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Mapping
 
 import typer
 from loguru import logger
@@ -15,10 +13,7 @@ from rich.console import Console
 
 from aeloon import __logo__
 from aeloon.cli.registry import CommandCatalog, CommandSpec
-from aeloon.core.agent.commands import all_specs as all_command_specs
-
-if TYPE_CHECKING:
-    from aeloon.cli.registry import CommandHandler
+from aeloon.core.agent.commands import all_specs_and_handlers
 
 _STATIC_COMMAND_SPECS: tuple[CommandSpec, ...] = (
     CommandSpec(
@@ -68,42 +63,39 @@ _STATIC_COMMAND_SPECS: tuple[CommandSpec, ...] = (
         ),
     ),
     CommandSpec(
+        name="memory_cli",
+        help="Manage layered memory providers and status.",
+        cli_path=("memory",),
+    ),
+    CommandSpec(
         name="ext",
         help="Run extension commands.",
         cli_path=("ext",),
     ),
 )
 
-_STATIC_SLASH_SPECS: tuple[CommandSpec, ...] = (
-    CommandSpec(name="stop", help="Stop the current task", slash_path=("stop",)),
-    CommandSpec(name="restart", help="Restart the bot", slash_path=("restart",)),
-)
+# /stop is handled directly in the Dispatcher run loop; only a spec is needed here.
+_STOP_SPEC = CommandSpec(name="stop", help="Stop the current task", slash_path=("stop",))
 
 BUILTIN_COMMAND_SPECS: tuple[CommandSpec, ...] = (
     *_STATIC_COMMAND_SPECS,
-    *_STATIC_SLASH_SPECS,
-    *all_command_specs(),
+    _STOP_SPEC,
+    *(spec for spec, _ in all_specs_and_handlers()),
 )
 
 
-def create_builtin_catalog(
-    handlers: Mapping[str, "CommandHandler"] | None = None,
-) -> CommandCatalog:
+def create_builtin_catalog() -> CommandCatalog:
     """Return a catalog preloaded with built-in command specs."""
     catalog = CommandCatalog()
-    if handlers:
-        catalog.extend(
-            tuple(replace(spec, handler=handlers.get(spec.name)) for spec in BUILTIN_COMMAND_SPECS)
-        )
-    else:
-        catalog.extend(BUILTIN_COMMAND_SPECS)
+    catalog.extend(BUILTIN_COMMAND_SPECS)
     return catalog
 
 
 def _apply_boot_defaults() -> None:
     """Apply lightweight environment defaults before runtime startup."""
     if sys.platform == "win32":
-        # Set Windows console code page to UTF-8 so Chinese / CJK output stays readable.
+        # Set Windows console code page to UTF-8 so that Chinese / CJK
+        # characters display correctly regardless of the system locale.
         try:
             import ctypes
 
@@ -142,24 +134,30 @@ console = Console()
 command_catalog = create_builtin_catalog()
 ext_app = typer.Typer(help="Run extension commands")
 app.add_typer(ext_app, name="ext")
+plugin_registry = None
+
+_CLI_DEPENDENCY_MODULES = {
+    "aeloon.cli.channels",
+    "aeloon.cli.plugins",
+    "aeloon.cli.providers",
+    "aeloon.cli.flows.agent",
+    "aeloon.cli.flows.benchmark",
+    "aeloon.cli.flows.gateway",
+    "aeloon.cli.flows.onboard",
+}
+
+
+def _module_is_initializing(name: str) -> bool:
+    module = sys.modules.get(name)
+    spec = getattr(module, "__spec__", None)
+    return bool(getattr(spec, "_initializing", False))
 
 
 def _should_import_commands_module() -> bool:
     """Return True when app bootstrap should import the command module."""
     if "aeloon.cli.commands" in sys.modules:
         return False
-    if any(
-        name in sys.modules
-        for name in {
-            "aeloon.cli.channels",
-            "aeloon.cli.plugins",
-            "aeloon.cli.providers",
-            "aeloon.cli.flows.agent",
-            "aeloon.cli.flows.benchmark",
-            "aeloon.cli.flows.gateway",
-            "aeloon.cli.flows.onboard",
-        }
-    ):
+    if any(_module_is_initializing(name) for name in _CLI_DEPENDENCY_MODULES):
         return False
 
     main_module = sys.modules.get("__main__")
@@ -168,14 +166,24 @@ def _should_import_commands_module() -> bool:
     return Path(main_file).resolve() != commands_file.resolve() if main_file else True
 
 
-if _should_import_commands_module():
-    from aeloon.cli import commands as _commands  # noqa: F401,E402
+def ensure_shared_cli_bootstrap() -> None:
+    """Retry shared CLI bootstrap after import cycles have settled."""
+    global plugin_registry
 
-try:
-    from aeloon.cli import plugins as _plugins
+    if _should_import_commands_module():
+        from aeloon.cli import commands as _commands  # noqa: F401,E402
 
-    plugin_registry = _plugins.build_lightweight_plugin_registry()
-    _plugins.register_plugin_cli(plugin_registry)
-except Exception as exc:
-    plugin_registry = None
-    logger.debug("Skipping lightweight CLI plugin bootstrap: {}", exc)
+    if plugin_registry is not None or _module_is_initializing("aeloon.cli.plugins"):
+        return
+
+    try:
+        from aeloon.cli import plugins as _plugins
+
+        plugin_registry = _plugins.build_lightweight_plugin_registry()
+        _plugins.register_plugin_cli(plugin_registry)
+    except Exception as exc:
+        plugin_registry = None
+        logger.debug("Skipping lightweight CLI plugin bootstrap: {}", exc)
+
+
+ensure_shared_cli_bootstrap()

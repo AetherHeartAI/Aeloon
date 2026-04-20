@@ -8,7 +8,7 @@ import shutil
 import socket
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from prompt_toolkit.formatted_text import FormattedText
 from rich.console import Group
@@ -156,15 +156,18 @@ def resolve_initial_cli_state(session_id: str) -> tuple[dict[str, str], bool]:
     return {"channel": channel, "chat_id": chat_id}, start_fresh
 
 
-def build_bottom_toolbar(agent_loop, cli_channel: str, cli_chat_id: str) -> callable:
+def build_bottom_toolbar(
+    agent_loop,
+    cli_channel: str,
+    cli_chat_id: str,
+) -> Callable[[], FormattedText]:
     """Build a prompt_toolkit bottom toolbar showing model/context usage."""
-
     from aeloon.core.agent.channel_auth import GatewayManager
 
     def _toolbar() -> FormattedText:
         session_key = f"{cli_channel}:{cli_chat_id}"
         session = agent_loop.sessions.get_or_create(session_key)
-        estimated, _source = agent_loop.memory_consolidator.estimate_session_prompt_tokens(session)
+        estimated, _source = agent_loop.memory.estimate_session_prompt_tokens(session)
         context_window = max(0, int(agent_loop.context_window_tokens))
         ratio = (estimated / context_window * 100) if context_window > 0 else 0.0
         model_value = str(agent_loop.model)
@@ -176,7 +179,10 @@ def build_bottom_toolbar(agent_loop, cli_channel: str, cli_chat_id: str) -> call
         available_model = max(8, width - reserved)
         if len(model_value) > available_model:
             model_value = f"{model_value[: max(1, available_model - 1)]}…"
-        spacing = max(3, width - len("Model: ") - len(model_value) - len(context_text))
+        spacing = max(
+            3,
+            width - len("Model: ") - len(model_value) - len(context_text),
+        )
         context_style = "bold ansired" if ratio >= 90 else "ansiyellow" if ratio >= 75 else ""
         return FormattedText(
             [

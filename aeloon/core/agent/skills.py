@@ -23,7 +23,11 @@ class SkillsLoader:
         self.workspace_skills = workspace / "skills"
         self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
 
-    def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
+    def list_skills(
+        self,
+        filter_unavailable: bool = True,
+        exclude_names: set[str] | None = None,
+    ) -> list[dict[str, str]]:
         """
         List all available skills.
 
@@ -39,6 +43,8 @@ class SkillsLoader:
         if self.workspace_skills.exists():
             for skill_dir in self.workspace_skills.iterdir():
                 if skill_dir.is_dir():
+                    if exclude_names and skill_dir.name in exclude_names:
+                        continue
                     skill_file = skill_dir / "SKILL.md"
                     if skill_file.exists():
                         skills.append(
@@ -49,6 +55,8 @@ class SkillsLoader:
         if self.builtin_skills and self.builtin_skills.exists():
             for skill_dir in self.builtin_skills.iterdir():
                 if skill_dir.is_dir():
+                    if exclude_names and skill_dir.name in exclude_names:
+                        continue
                     skill_file = skill_dir / "SKILL.md"
                     if skill_file.exists() and not any(s["name"] == skill_dir.name for s in skills):
                         skills.append(
@@ -102,7 +110,7 @@ class SkillsLoader:
 
         return "\n\n---\n\n".join(parts) if parts else ""
 
-    def build_skills_summary(self) -> str:
+    def build_skills_summary(self, exclude_names: set[str] | None = None) -> str:
         """
         Build a summary of all skills (name, description, path, availability).
 
@@ -112,7 +120,7 @@ class SkillsLoader:
         Returns:
             XML-formatted skills summary.
         """
-        all_skills = self.list_skills(filter_unavailable=False)
+        all_skills = self.list_skills(filter_unavailable=False, exclude_names=exclude_names)
         if not all_skills:
             return ""
 
@@ -174,9 +182,17 @@ class SkillsLoader:
         """Parse skill metadata JSON from frontmatter (supports aeloon and openclaw keys)."""
         try:
             data = json.loads(raw)
-            return data.get("aeloon", data.get("openclaw", {})) if isinstance(data, dict) else {}
+            if not isinstance(data, dict):
+                return {}
+            nested = data.get("aeloon", data.get("openclaw", {}))
+            return nested if isinstance(nested, dict) else {}
         except (json.JSONDecodeError, TypeError):
             return {}
+
+    def _is_true(self, value: object) -> bool:
+        if isinstance(value, str):
+            return value.strip().lower() == "true"
+        return bool(value)
 
     def _check_requirements(self, skill_meta: dict) -> bool:
         """Check if skill requirements are met (bins, env vars)."""
@@ -194,13 +210,13 @@ class SkillsLoader:
         meta = self.get_skill_metadata(name) or {}
         return self._parse_aeloon_metadata(meta.get("metadata", ""))
 
-    def get_always_skills(self) -> list[str]:
+    def get_always_skills(self, exclude_names: set[str] | None = None) -> list[str]:
         """Get skills marked as always=true that meet requirements."""
         result = []
-        for s in self.list_skills(filter_unavailable=True):
+        for s in self.list_skills(filter_unavailable=True, exclude_names=exclude_names):
             meta = self.get_skill_metadata(s["name"]) or {}
             skill_meta = self._parse_aeloon_metadata(meta.get("metadata", ""))
-            if skill_meta.get("always") or meta.get("always"):
+            if self._is_true(skill_meta.get("always")) or self._is_true(meta.get("always")):
                 result.append(s["name"])
         return result
 

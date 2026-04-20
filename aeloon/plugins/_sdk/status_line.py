@@ -107,8 +107,8 @@ class StatusLineManager:
         if self._registry is not None:
             for rec in self._registry.status_providers:
                 try:
-                    result = rec.provider(ctx)
-                    segments.extend(self._normalise_result(result))
+                    provider_result = rec.provider(ctx)
+                    segments.extend(self._normalise_result(provider_result))
                 except Exception:
                     logger.opt(exception=True).warning(
                         "Status provider '{}' from plugin '{}' failed",
@@ -117,19 +117,20 @@ class StatusLineManager:
                     )
 
         # If no providers contributed anything, fall back to the default
+        toolbar: Any
         if not segments:
-            result = self._default_toolbar(ctx)
+            toolbar = self._default_toolbar(ctx)
         else:
             # Sort by priority (highest first = leftmost) and assemble
             segments.sort(key=lambda s: s.priority, reverse=True)
-            result = self._segments_to_formatted(segments, ctx.terminal_width)
+            toolbar = self._segments_to_formatted(segments, ctx.terminal_width)
 
         # Append thinking indicator when the agent is working
         if self.thinking:
             thinking_part = [("bold ansiyellow", " ● thinking...")]
-            result = FormattedText(list(result) + thinking_part)
+            toolbar = FormattedText(list(toolbar) + thinking_part)
 
-        return result
+        return toolbar
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -140,7 +141,7 @@ class StatusLineManager:
         loop = self._agent_loop
         session_key = f"{channel}:{chat_id}"
         session = loop.sessions.get_or_create(session_key)
-        estimated, _source = loop.memory_consolidator.estimate_session_prompt_tokens(session)
+        estimated, _source = loop.memory.estimate_session_prompt_tokens(session)
         context_total = max(0, int(loop.context_window_tokens))
         width = shutil.get_terminal_size((80, 20)).columns
         return StatusContext(

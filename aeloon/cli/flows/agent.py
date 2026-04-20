@@ -22,7 +22,7 @@ from prompt_toolkit.layout import Layout
 from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.widgets import Box, Frame, TextArea
 
-from aeloon.cli.app import console
+from aeloon.cli.app import console, ensure_shared_cli_bootstrap
 from aeloon.cli.flows.helpers import boot_plugins
 from aeloon.cli.interactive.display import (
     ThinkingSpinner,
@@ -77,6 +77,29 @@ _try_render_inline_image = try_render_inline_image
 _rank_slash_commands = rank_slash_commands
 _should_open_slash_palette = should_open_slash_palette
 _auto_descend_query = auto_descend_query
+
+
+async def _finalize_session_before_shutdown(
+    agent_loop,
+    session_key: str,
+    *,
+    reason: str,
+) -> None:
+    if not hasattr(agent_loop, "sessions") or not hasattr(agent_loop, "memory"):
+        return
+    if not hasattr(agent_loop.memory, "finalize_session") or not hasattr(
+        agent_loop.memory, "pending_start_index"
+    ):
+        return
+    session = agent_loop.sessions.get_or_create(session_key)
+    start_index = agent_loop.memory.pending_start_index(session)
+    pending_messages = list(session.messages[start_index:])
+    if session.messages:
+        await agent_loop.memory.finalize_session(
+            session=session,
+            pending_messages=pending_messages,
+            reason=reason,
+        )
 
 
 def effective_profile_mode(
@@ -136,6 +159,36 @@ def _restore_terminal() -> None:
         termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, _SAVED_TERM_ATTRS)
     except Exception:
         pass
+
+
+def _format_interactive_exit_message(signal_name: str | None = None) -> str:
+    """Return the user-facing exit message for interactive CLI shutdown."""
+    if signal_name:
+        return f"Received {signal_name}, goodbye!"
+    return "Goodbye!"
+
+
+def _exec_restart() -> None:
+    """Restart the current CLI process in-place."""
+    os.execv(sys.executable, [sys.executable, "-m", "aeloon"] + sys.argv[1:])
+
+
+def _handle_interactive_signal(signum: int, frame: Any, signal_state: dict[str, Any]) -> None:
+    """Route interactive CLI signals through cancellable or graceful shutdown paths."""
+    sig_name = signal.Signals(signum).name
+    cancel_turn = signal_state.get("cancel_turn")
+    if (
+        signum == signal.SIGINT
+        and signal_state.get("turn_active")
+        and cancel_turn is not None
+        and not signal_state.get("in_log_viewer")
+    ):
+        cancel_turn()
+        return
+
+    signal_state["exit_signal_name"] = sig_name
+    _restore_terminal()
+    raise KeyboardInterrupt
 
 
 def _read_tty_bytes(fd: int, timeout: float) -> bytes:
@@ -290,11 +343,14 @@ async def _wait_for_turn_completion(
                     break
 
                 if logs_wait is not None and logs_wait in done:
-                    open_logs_requested.clear()
+                    if open_logs_requested is not None:
+                        open_logs_requested.clear()
                     if ctrl_l_task is not None:
                         ctrl_l_task.cancel()
                         await asyncio.gather(ctrl_l_task, return_exceptions=True)
                         ctrl_l_task = None
+                    if open_log_viewer is None:
+                        break
                     viewer_result = await open_log_viewer()
                     if viewer_result == "exit_process":
                         raise KeyboardInterrupt
@@ -354,7 +410,7 @@ async def _interactive_menu(title: str, options: list[tuple[str, str, str]]) -> 
         event.app.exit()
 
     _render()
-    prompt_app = Application(
+    prompt_app: Application[None] = Application(
         layout=Layout(Box(Frame(body, title=title), padding=1)),
         key_bindings=kb,
         full_screen=False,
@@ -485,7 +541,10 @@ def run_agent(
 
     loaded_config = load_runtime_config(config, workspace)
     print_deprecated_memory_window_notice(loaded_config)
-    sync_workspace_templates(loaded_config.workspace_path)
+    sync_workspace_templates(
+        loaded_config.workspace_path,
+        include_file_memory=loaded_config.memory.prompt.enabled,
+    )
 
     bus = MessageBus()
     provider = make_provider(loaded_config)
@@ -510,6 +569,7 @@ def run_agent(
         restrict_to_workspace=loaded_config.tools.restrict_to_workspace,
         mcp_servers=loaded_config.tools.mcp_servers,
         channels_config=loaded_config.channels,
+        memory_config=loaded_config.memory,
         output_mode=loaded_config.agents.defaults.output_mode,
         fast=loaded_config.agents.defaults.fast,
     )
@@ -520,6 +580,7 @@ def run_agent(
     profile_mode = effective_profile_mode(agent_loop, profile, deep_profile)
     agent_loop.profiler.enabled = profile_mode is not None
     thinking = None
+    restart_requested = False
 
     async def _cli_progress(content: str, *, tool_hint: bool = False) -> None:
         ch = agent_loop.channels_config
@@ -546,7 +607,7 @@ def run_agent(
                 _print_stderr_profile_report(report)
 
         async def _run_once() -> None:
-            nonlocal thinking
+            nonlocal thinking, restart_requested
             agent_loop.plugin_manager = await boot_plugins(agent_loop, loaded_config)
             if agent_loop.plugin_manager:
                 register_plugin_cli(agent_loop.plugin_manager.registry)
@@ -561,7 +622,7 @@ def run_agent(
             except (ValueError, OSError):
                 pass
 
-            async def _run_channel_auth_once(channel_name: str) -> None:
+            async def _run_wechat_auth_once() -> None:
                 from aeloon.core.bus.events import InboundMessage
 
                 effective_session_key = session_id
@@ -589,19 +650,10 @@ def run_agent(
                             if outbound.content:
                                 _print_agent_response(outbound.content, render_markdown=markdown)
                         text = (outbound.content or "").lower()
-                        if (
-                            channel_name == "wechat"
-                            and "please scan this qr code with wechat" in text
-                        ):
+                        if "please scan this qr code with wechat" in text:
                             saw_initial = True
                             continue
                         if (
-                            channel_name == "feishu"
-                            and "please scan this qr code with feishu" in text
-                        ):
-                            saw_initial = True
-                            continue
-                        if channel_name == "wechat" and (
                             "already logged in to wechat" in text
                             or "failed to initiate wechat login" in text
                             or "wechat login successful" in text
@@ -612,19 +664,6 @@ def run_agent(
                             or "not currently logged in to wechat" in text
                             or (saw_initial and "wechat channel is starting" in text)
                             or (saw_initial and "wechat credentials saved" in text)
-                        ):
-                            break
-                        if channel_name == "feishu" and (
-                            "already logged in to feishu" in text
-                            or "failed to initiate feishu login" in text
-                            or "feishu login successful" in text
-                            or "feishu login timed out" in text
-                            or "feishu login failed" in text
-                            or "feishu login was cancelled" in text
-                            or "feishu logged out" in text
-                            or "not currently logged in to feishu" in text
-                            or (saw_initial and "feishu channel is starting" in text)
-                            or (saw_initial and "feishu credentials saved" in text)
                         ):
                             break
                 finally:
@@ -638,12 +677,7 @@ def run_agent(
             try:
                 with thinking:
                     if message.strip() in {"/wechat login", "/wechat logout"}:
-                        await _run_channel_auth_once("wechat")
-                    elif (
-                        message.strip().startswith("/feishu login")
-                        or message.strip() == "/feishu logout"
-                    ):
-                        await _run_channel_auth_once("feishu")
+                        await _run_wechat_auth_once()
                     else:
                         response = await agent_loop.process_direct_full(
                             message, session_id, on_progress=_cli_progress
@@ -652,14 +686,19 @@ def run_agent(
                         if response and response.media:
                             for media_path in response.media:
                                 _try_render_inline_image(media_path)
-                        _print_agent_response(
-                            response.content if response else "", render_markdown=markdown
-                        )
+                        if response:
+                            restart_requested = bool(response.metadata.get("_restart_requested"))
+                            _print_agent_response(response.content, render_markdown=markdown)
                 thinking = None
             except (KeyboardInterrupt, asyncio.CancelledError):
                 thinking = None
                 print("\n\n— interrupted —\n", file=sys.stderr)
             finally:
+                await _finalize_session_before_shutdown(
+                    agent_loop,
+                    session_id,
+                    reason="cli-shutdown",
+                )
                 _print_profile_if_available()
                 try:
                     signal.signal(signal.SIGTERM, sigterm_handler)
@@ -670,9 +709,11 @@ def run_agent(
                 await agent_loop.close_mcp()
 
         asyncio.run(_run_once())
+        if restart_requested:
+            _exec_restart()
         return
 
-    from aeloon.core.bus.events import InboundMessage
+    from aeloon.core.bus.events import InboundMessage, OutboundMessage
     from aeloon.plugins._sdk.status_line import StatusLineManager
 
     cli_state, _start_fresh = resolve_initial_cli_state(session_id)
@@ -702,21 +743,16 @@ def run_agent(
     signal_state: dict[str, Any] = {
         "cancel_turn": None,
         "turn_active": False,
+        "exit_signal_name": None,
         "in_log_viewer": False,
     }
 
     def _handle_signal(signum, frame):
-        cancel_turn = signal_state.get("cancel_turn")
-        if (
-            signum == signal.SIGINT
-            and signal_state.get("turn_active")
-            and cancel_turn is not None
-            and not signal_state.get("in_log_viewer")
-        ):
-            cancel_turn()
-            return
-        _restore_terminal()
-        raise KeyboardInterrupt
+        _handle_interactive_signal(signum, frame, signal_state)
+
+    def _print_exit_message() -> None:
+        console.print(f"\n{_format_interactive_exit_message(signal_state.get('exit_signal_name'))}")
+        signal_state["exit_signal_name"] = None
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
@@ -726,15 +762,14 @@ def run_agent(
         signal.signal(signal.SIGPIPE, signal.SIG_IGN)
 
     async def _run_interactive():
-        nonlocal thinking
-        agent_loop.plugin_manager = await boot_plugins(agent_loop, loaded_config)
-        if agent_loop.plugin_manager:
-            register_plugin_cli(agent_loop.plugin_manager.registry)
-            status_mgr.set_registry(agent_loop.plugin_manager.registry)
-        bus_task = asyncio.create_task(agent_loop.run())
+        nonlocal thinking, restart_requested
+        bus_task: asyncio.Task[None] | None = None
+        outbound_task: asyncio.Task[None] | None = None
+        restart_pending = asyncio.Event()
         turn_done = asyncio.Event()
         turn_done.set()
         turn_response: list[str] = []
+        turn_cancel_pending = False
         current_turn_task: asyncio.Task[None] | None = None
         active_turn_id: int | None = None
         turn_counter = 0
@@ -744,12 +779,13 @@ def run_agent(
         abandoned_turn_tasks: set[asyncio.Task[None]] = set()
 
         def _mark_turn_cancelled() -> None:
-            nonlocal active_turn_id
+            nonlocal active_turn_id, turn_cancel_pending
             signal_state["turn_active"] = False
             active_turn_id = None
+            turn_cancel_pending = True
+            turn_response.clear()
             if turn_done.is_set():
                 return
-            turn_response.clear()
             turn_response.append("Interrupted current task.")
             turn_done.set()
 
@@ -761,15 +797,16 @@ def run_agent(
             if task.cancelled():
                 loop.call_soon_threadsafe(_mark_turn_cancelled)
 
-        async def _cancel_current_turn() -> bool:
+        async def _cancel_current_turn(*, show_feedback: bool = True) -> bool:
             nonlocal current_turn_task
             task = current_turn_task
             if task is None or task.done():
                 return False
-            await _print_interactive_progress_line(
-                "Interrupt requested. Stopping current task...",
-                thinking,
-            )
+            if show_feedback:
+                await _print_interactive_progress_line(
+                    "Interrupt requested. Stopping current task...",
+                    thinking,
+                )
             task.cancel()
             abandoned_turn_tasks.add(task)
             current_turn_task = None
@@ -779,7 +816,7 @@ def run_agent(
 
         signal_state["cancel_turn"] = lambda: loop.call_soon_threadsafe(cancel_requested.set)
 
-        async def _run_gateway_log_viewer_for_turn() -> str:
+        async def _run_gateway_log_viewer_for_turn(*, can_cancel_turn: bool) -> str:
             from aeloon.cli.interactive.log_viewer import (
                 LOG_VIEWER_RESULT_EXIT_PROCESS,
                 run_gateway_log_viewer,
@@ -795,6 +832,15 @@ def run_agent(
                 return "exit_process"
             return "close"
 
+        deferred_messages: list[OutboundMessage] = []
+
+        async def _flush_deferred() -> None:
+            """Deliver deferred background messages after the active turn ends."""
+            for deferred in deferred_messages:
+                if deferred.content:
+                    await print_interactive_response(deferred.content, render_markdown=markdown)
+            deferred_messages.clear()
+
         async def _consume_outbound():
             while True:
                 try:
@@ -802,6 +848,10 @@ def run_agent(
                     msg_turn_id = msg.metadata.get("_interactive_turn_id")
                     is_stale_turn_msg = msg_turn_id is not None and msg_turn_id != active_turn_id
                     if is_stale_turn_msg:
+                        continue
+                    # Defer background pushes while a turn is active
+                    if msg.metadata.get("_deferrable") and not turn_done.is_set():
+                        deferred_messages.append(msg)
                         continue
                     if msg.media:
                         await _handle_interactive_media(msg.media, thinking)
@@ -817,46 +867,63 @@ def run_agent(
                         else:
                             await _print_interactive_progress_line(msg.content, thinking)
                     elif not turn_done.is_set():
-                        if msg.metadata.get("_session_switch"):
-                            target_key = str(msg.metadata.get("session_key") or "")
-                            if ":" in target_key:
-                                next_channel, next_chat_id = target_key.split(":", 1)
-                                cli_state["channel"] = next_channel
-                                cli_state["chat_id"] = next_chat_id
-                                session = agent_loop.sessions.get_or_create(target_key)
-                                replay_messages = session_display_messages(session)
-                                if replay_messages:
-                                    from prompt_toolkit.application import run_in_terminal
+                        if turn_cancel_pending:
+                            turn_done.set()
+                        else:
+                            if msg.metadata.get("_restart_requested"):
+                                restart_pending.set()
+                            if msg.metadata.get("_session_switch"):
+                                target_key = str(msg.metadata.get("session_key") or "")
+                                if ":" in target_key:
+                                    next_channel, next_chat_id = target_key.split(":", 1)
+                                    cli_state["channel"] = next_channel
+                                    cli_state["chat_id"] = next_chat_id
+                                    session = agent_loop.sessions.get_or_create(target_key)
+                                    replay_messages = session_display_messages(session)
+                                    if replay_messages:
+                                        from prompt_toolkit.application import run_in_terminal
 
-                                    await run_in_terminal(
-                                        lambda: (
-                                            console.print("[dim]Switched session history:[/dim]\n"),
-                                            print_replayed_history(
-                                                replay_messages,
-                                                markdown,
-                                                console=console,
-                                                print_agent_response=_print_agent_response,
-                                            ),
+                                        await run_in_terminal(
+                                            lambda: (
+                                                console.print(
+                                                    "[dim]Switched session history:[/dim]\n"
+                                                ),
+                                                print_replayed_history(
+                                                    replay_messages,
+                                                    markdown,
+                                                    console=console,
+                                                    print_agent_response=_print_agent_response,
+                                                ),
+                                            )
                                         )
-                                    )
-                        if msg.content:
-                            turn_response.append(msg.content)
-                        turn_done.set()
-                    elif msg.content:
+                            if msg.content:
+                                turn_response.append(msg.content)
+                            turn_done.set()
+                    elif msg.content and not turn_cancel_pending:
                         await print_interactive_response(msg.content, render_markdown=markdown)
                 except asyncio.TimeoutError:
+                    # Flush deferred messages when turn is done
+                    if turn_done.is_set() and deferred_messages:
+                        await _flush_deferred()
                     continue
                 except asyncio.CancelledError:
                     break
 
-        outbound_task = asyncio.create_task(_consume_outbound())
         try:
+            agent_loop.plugin_manager = await boot_plugins(agent_loop, loaded_config)
+            if agent_loop.plugin_manager:
+                register_plugin_cli(agent_loop.plugin_manager.registry)
+                status_mgr.set_registry(agent_loop.plugin_manager.registry)
+            bus_task = asyncio.create_task(agent_loop.run())
+            outbound_task = asyncio.create_task(_consume_outbound())
             while True:
                 try:
                     _flush_pending_tty_input()
                     user_input = await _read_interactive_input_async()
                     if user_input == _OPEN_GATEWAY_LOGS_SENTINEL:
-                        viewer_result = await _run_gateway_log_viewer_for_turn()
+                        viewer_result = await _run_gateway_log_viewer_for_turn(
+                            can_cancel_turn=False
+                        )
                         if viewer_result == "exit_process":
                             raise KeyboardInterrupt
                         continue
@@ -889,6 +956,7 @@ def run_agent(
 
                     turn_done.clear()
                     turn_response.clear()
+                    turn_cancel_pending = False
                     signal_state["turn_active"] = True
                     turn_counter += 1
                     active_turn_id = turn_counter
@@ -913,20 +981,29 @@ def run_agent(
                         cancel_requested=cancel_requested,
                         cancel_current_turn=_cancel_current_turn,
                         open_logs_requested=open_logs_requested,
-                        open_log_viewer=_run_gateway_log_viewer_for_turn,
+                        open_log_viewer=lambda: _run_gateway_log_viewer_for_turn(
+                            can_cancel_turn=True
+                        ),
                     )
                     signal_state["turn_active"] = False
                     active_turn_id = None
 
                     if turn_response:
                         _print_agent_response(turn_response[0], render_markdown=markdown)
+                    if restart_pending.is_set():
+                        restart_requested = True
+                        break
                 except (KeyboardInterrupt, EOFError):
                     _restore_terminal()
-                    console.print("\nGoodbye!")
+                    _print_exit_message()
                     break
+        except KeyboardInterrupt:
+            _restore_terminal()
+            _print_exit_message()
         finally:
             signal_state["cancel_turn"] = None
             signal_state["turn_active"] = False
+            signal_state["exit_signal_name"] = None
             active_turn_id = None
             if current_turn_task is not None and not current_turn_task.done():
                 current_turn_task.cancel()
@@ -938,8 +1015,16 @@ def run_agent(
                 except asyncio.TimeoutError:
                     pass
             agent_loop.stop()
-            outbound_task.cancel()
-            await asyncio.gather(bus_task, outbound_task, return_exceptions=True)
+            if outbound_task is not None:
+                outbound_task.cancel()
+            tasks_to_join = [task for task in (bus_task, outbound_task) if task is not None]
+            if tasks_to_join:
+                await asyncio.gather(*tasks_to_join, return_exceptions=True)
+            await _finalize_session_before_shutdown(
+                agent_loop,
+                f"{cli_state['channel']}:{cli_state['chat_id']}",
+                reason="cli-shutdown",
+            )
             if agent_loop.plugin_manager:
                 await agent_loop.plugin_manager.shutdown()
             pm = getattr(agent_loop, "plugin_manager", None)
@@ -953,3 +1038,9 @@ def run_agent(
             await agent_loop.close_mcp()
 
     asyncio.run(_run_interactive())
+    if restart_requested:
+        _exec_restart()
+
+
+ensure_shared_cli_bootstrap()
+from aeloon.cli import commands as _commands  # noqa: F401,E402

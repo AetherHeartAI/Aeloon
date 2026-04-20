@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from loguru import logger
 
@@ -21,16 +22,91 @@ class Session:
     Stores messages in JSONL format for easy reading and persistence.
 
     Important: Messages are append-only for LLM cache efficiency.
-    The consolidation process writes summaries to MEMORY.md/HISTORY.md
-    but does NOT modify the messages list or get_history() output.
+    Memory backends may archive or summarize old turns without modifying
+    the messages list or get_history() output.
     """
 
     key: str  # channel:chat_id
+    archive_session_id: str = field(default_factory=lambda: f"session-{uuid4().hex}")
+    lineage_id: str = ""
+    parent_archive_session_id: str | None = None
+    ended_at: datetime | None = None
+    end_reason: str | None = None
     messages: list[dict[str, Any]] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     metadata: dict[str, Any] = field(default_factory=dict)
-    last_consolidated: int = 0  # Number of messages already consolidated to files
+    memory_state: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.lineage_id:
+            self.lineage_id = self.archive_session_id
+
+    def _local_memory_state(self, *, create: bool = True) -> dict[str, Any]:
+        raw_local_state = self.memory_state.get("local")
+        if isinstance(raw_local_state, dict):
+            local_state = raw_local_state
+        else:
+            local_state = {}
+            if create:
+                self.memory_state["local"] = local_state
+
+        legacy_file_state = self.memory_state.get("file")
+        if "last_compacted" not in local_state and isinstance(legacy_file_state, dict):
+            raw_value = legacy_file_state.get("last_consolidated", 0)
+            if isinstance(raw_value, int):
+                local_state = dict(local_state)
+                local_state["last_compacted"] = raw_value
+                if create:
+                    self.memory_state["local"] = local_state
+        return local_state
+
+    @property
+    def last_compacted(self) -> int:
+        raw_value = self._local_memory_state(create=False).get("last_compacted", 0)
+        return raw_value if isinstance(raw_value, int) else 0
+
+    @last_compacted.setter
+    def last_compacted(self, value: int) -> None:
+        self._local_memory_state()["last_compacted"] = value
+
+    @property
+    def last_consolidated(self) -> int:
+        return self.last_compacted
+
+    @last_consolidated.setter
+    def last_consolidated(self, value: int) -> None:
+        self.last_compacted = value
+
+    def normalize_memory_state(self) -> None:
+        self._local_memory_state()
+        legacy_file_state = self.memory_state.get("file")
+        if isinstance(legacy_file_state, dict) and "last_consolidated" in legacy_file_state:
+            trimmed = dict(legacy_file_state)
+            trimmed.pop("last_consolidated", None)
+            if trimmed:
+                self.memory_state["file"] = trimmed
+            else:
+                self.memory_state.pop("file", None)
+        local_state = self.memory_state.get("local")
+        if isinstance(local_state, dict) and not local_state:
+            self.memory_state.pop("local", None)
+
+    def get_prompt_memory_snapshot(self) -> dict[str, str] | None:
+        raw = self.memory_state.get("prompt_memory")
+        if not isinstance(raw, dict):
+            return None
+        memory = raw.get("memory")
+        user = raw.get("user")
+        if isinstance(memory, str) and isinstance(user, str):
+            return {"memory": memory, "user": user}
+        return None
+
+    def set_prompt_memory_snapshot(self, snapshot: dict[str, str]) -> None:
+        self.memory_state["prompt_memory"] = {
+            "memory": snapshot.get("memory", ""),
+            "user": snapshot.get("user", ""),
+        }
 
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
         """Add a message to the session."""
@@ -61,10 +137,16 @@ class Session:
                                     declared.add(str(tc["id"]))
         return start
 
-    def get_history(self, max_messages: int = 500) -> list[dict[str, Any]]:
+    def get_history(
+        self,
+        *,
+        start_index: int | None = None,
+        max_messages: int = 500,
+    ) -> list[dict[str, Any]]:
         """Return unconsolidated messages for LLM input, aligned to a legal tool-call boundary."""
-        unconsolidated = self.messages[self.last_consolidated :]
-        sliced = unconsolidated[-max_messages:]
+        history_start = self.last_compacted if start_index is None else start_index
+        unconsolidated = self.messages[history_start:]
+        sliced = unconsolidated[-max_messages:] if max_messages else list(unconsolidated)
 
         # Drop leading non-user messages to avoid starting mid-turn when possible.
         for i, message in enumerate(sliced):
@@ -90,7 +172,7 @@ class Session:
     def clear(self) -> None:
         """Clear all messages and reset session to initial state."""
         self.messages = []
-        self.last_consolidated = 0
+        self.memory_state = {}
         self.updated_at = datetime.now()
 
 
@@ -116,6 +198,9 @@ class SessionManager:
         """Legacy global session path (~/.aeloon/sessions/)."""
         safe_key = safe_filename(key.replace(":", "_"))
         return self.legacy_sessions_dir / f"{safe_key}.jsonl"
+
+    def _legacy_archive_session_id(self, key: str) -> str:
+        return f"{self.workspace.resolve()}::{key}"
 
     def get_or_create(self, key: str) -> Session:
         """
@@ -156,7 +241,13 @@ class SessionManager:
             messages = []
             metadata = {}
             created_at = None
-            last_consolidated = 0
+            updated_at = None
+            memory_state: dict[str, Any] = {}
+            archive_session_id = ""
+            lineage_id = ""
+            parent_archive_session_id: str | None = None
+            ended_at: datetime | None = None
+            end_reason: str | None = None
 
             with open(path, encoding="utf-8") as f:
                 for line in f:
@@ -173,16 +264,56 @@ class SessionManager:
                             if data.get("created_at")
                             else None
                         )
-                        last_consolidated = data.get("last_consolidated", 0)
+                        updated_at = (
+                            datetime.fromisoformat(data["updated_at"])
+                            if data.get("updated_at")
+                            else None
+                        )
+                        raw_memory_state = data.get("memory_state", {})
+                        if isinstance(raw_memory_state, dict):
+                            memory_state = raw_memory_state
+                        else:
+                            memory_state = {}
+
+                        if "memory_state" not in data:
+                            memory_state = {
+                                "local": {"last_compacted": data.get("last_consolidated", 0)}
+                            }
+                        raw_archive_session_id = data.get("archive_session_id")
+                        if isinstance(raw_archive_session_id, str) and raw_archive_session_id:
+                            archive_session_id = raw_archive_session_id
+                        raw_lineage_id = data.get("lineage_id")
+                        if isinstance(raw_lineage_id, str) and raw_lineage_id:
+                            lineage_id = raw_lineage_id
+                        raw_parent_archive_session_id = data.get("parent_archive_session_id")
+                        if (
+                            isinstance(raw_parent_archive_session_id, str)
+                            and raw_parent_archive_session_id
+                        ):
+                            parent_archive_session_id = raw_parent_archive_session_id
+                        raw_ended_at = data.get("ended_at")
+                        if isinstance(raw_ended_at, str) and raw_ended_at:
+                            ended_at = datetime.fromisoformat(raw_ended_at)
+                        raw_end_reason = data.get("end_reason")
+                        if isinstance(raw_end_reason, str) and raw_end_reason:
+                            end_reason = raw_end_reason
                     else:
                         messages.append(data)
 
+            resolved_archive_session_id = archive_session_id or self._legacy_archive_session_id(key)
+            resolved_lineage_id = lineage_id or resolved_archive_session_id
             return Session(
                 key=key,
+                archive_session_id=resolved_archive_session_id,
+                lineage_id=resolved_lineage_id,
+                parent_archive_session_id=parent_archive_session_id,
+                ended_at=ended_at,
+                end_reason=end_reason,
                 messages=messages,
                 created_at=created_at or datetime.now(),
+                updated_at=updated_at or datetime.now(),
                 metadata=metadata,
-                last_consolidated=last_consolidated,
+                memory_state=memory_state,
             )
         except Exception as e:
             logger.warning("Failed to load session {}: {}", key, e)
@@ -191,6 +322,7 @@ class SessionManager:
     def save(self, session: Session) -> None:
         """Save a session to disk."""
         path = self._get_session_path(session.key)
+        session.normalize_memory_state()
 
         with open(path, "w", encoding="utf-8") as f:
             metadata_line = {
@@ -198,8 +330,13 @@ class SessionManager:
                 "key": session.key,
                 "created_at": session.created_at.isoformat(),
                 "updated_at": session.updated_at.isoformat(),
+                "archive_session_id": session.archive_session_id,
+                "lineage_id": session.lineage_id,
+                "parent_archive_session_id": session.parent_archive_session_id,
+                "ended_at": session.ended_at.isoformat() if session.ended_at else None,
+                "end_reason": session.end_reason,
                 "metadata": session.metadata,
-                "last_consolidated": session.last_consolidated,
+                "memory_state": session.memory_state,
             }
             f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
             for msg in session.messages:
@@ -268,6 +405,27 @@ class SessionManager:
     def invalidate(self, key: str) -> None:
         """Remove a session from the in-memory cache."""
         self._cache.pop(key, None)
+
+    def rollover(self, key: str, *, reason: str) -> tuple[Session, Session]:
+        """End the current active session and create a fresh replacement for the same route key."""
+        current = self.get_or_create(key)
+        current.ended_at = datetime.now()
+        current.end_reason = reason
+        current.updated_at = datetime.now()
+
+        replacement = Session(key=key)
+        replacement.lineage_id = replacement.archive_session_id
+        self._cache[key] = replacement
+        return current, replacement
+
+    def archive_metadata(self, session: Session) -> dict[str, object]:
+        """Return archive-friendly metadata for a session snapshot."""
+        source, chat_id = session.key.split(":", 1) if ":" in session.key else (session.key, None)
+        metadata = dict(session.metadata)
+        metadata.setdefault("source", source)
+        metadata.setdefault("chat_id", chat_id)
+        metadata.setdefault("lineage_id", session.key)
+        return metadata
 
     def list_sessions(self) -> list[dict[str, Any]]:
         """

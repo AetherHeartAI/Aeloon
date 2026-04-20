@@ -1,6 +1,6 @@
 """Test session management with cache-friendly message handling."""
 
-import asyncio
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -84,6 +84,29 @@ class TestSessionLastConsolidated:
         session.clear()
         assert len(session.messages) == 0
         assert session.last_consolidated == 0
+
+    def test_load_legacy_last_consolidated_into_memory_state(self, tmp_path) -> None:
+        manager = SessionManager(Path(tmp_path))
+        path = manager.sessions_dir / "cli_test.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "_type": "metadata",
+                    "key": "cli:test",
+                    "created_at": "2026-01-01T00:00:00",
+                    "updated_at": "2026-01-01T00:00:00",
+                    "last_consolidated": 12,
+                    "metadata": {},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        session = manager.get_or_create("cli:test")
+
+        assert session.memory_state["local"]["last_compacted"] == 12
 
 
 class TestSessionImmutableHistory:
@@ -501,17 +524,19 @@ class TestNewCommandArchival:
             model="test-model",
             context_window_tokens=1,
         )
-        loop.provider.chat_with_retry = AsyncMock(
-            return_value=LLMResponse(content="ok", tool_calls=[])
+        setattr(
+            loop.provider,
+            "chat_with_retry",
+            AsyncMock(return_value=LLMResponse(content="ok", tool_calls=[])),
         )
-        loop.tools.get_definitions = MagicMock(return_value=[])
+        object.__setattr__(loop.tools, "get_definitions", MagicMock(return_value=[]))
         return loop
 
     @pytest.mark.asyncio
     async def test_new_clears_session_immediately_even_if_archive_fails(
         self, tmp_path: Path
     ) -> None:
-        """/new clears session immediately; archive_messages retries until raw dump."""
+        """/new clears session immediately even though local archive is retired."""
         from aeloon.core.bus.events import InboundMessage
 
         loop = self._make_loop(tmp_path)
@@ -528,7 +553,7 @@ class TestNewCommandArchival:
             call_count += 1
             return False
 
-        loop.memory_consolidator.consolidate_messages = _failing_consolidate  # type: ignore[method-assign]
+        loop.memory.local_memory.consolidate_messages = _failing_consolidate  # type: ignore[assignment,method-assign]
 
         new_msg = InboundMessage(channel="cli", sender_id="user", chat_id="test", content="/new")
         response = await loop._process_message(new_msg)
@@ -540,10 +565,12 @@ class TestNewCommandArchival:
         assert len(session_after.messages) == 0
 
         await loop.close_mcp()
-        assert call_count == 3  # retried up to raw-archive threshold
+        assert call_count == 0
 
     @pytest.mark.asyncio
-    async def test_new_archives_only_unconsolidated_messages(self, tmp_path: Path) -> None:
+    async def test_new_does_not_call_local_archive_for_unconsolidated_messages(
+        self, tmp_path: Path
+    ) -> None:
         from aeloon.core.bus.events import InboundMessage
 
         loop = self._make_loop(tmp_path)
@@ -561,7 +588,7 @@ class TestNewCommandArchival:
             archived_count = len(messages)
             return True
 
-        loop.memory_consolidator.consolidate_messages = _fake_consolidate  # type: ignore[method-assign]
+        loop.memory.local_memory.consolidate_messages = _fake_consolidate  # type: ignore[assignment,method-assign]
 
         new_msg = InboundMessage(channel="cli", sender_id="user", chat_id="test", content="/new")
         response = await loop._process_message(new_msg)
@@ -570,7 +597,7 @@ class TestNewCommandArchival:
         assert "new session started" in response.content.lower()
 
         await loop.close_mcp()
-        assert archived_count == 3
+        assert archived_count == -1
 
     @pytest.mark.asyncio
     async def test_new_clears_session_and_responds(self, tmp_path: Path) -> None:
@@ -586,7 +613,7 @@ class TestNewCommandArchival:
         async def _ok_consolidate(_messages) -> bool:
             return True
 
-        loop.memory_consolidator.consolidate_messages = _ok_consolidate  # type: ignore[method-assign]
+        loop.memory.local_memory.consolidate_messages = _ok_consolidate  # type: ignore[assignment,method-assign]
 
         new_msg = InboundMessage(channel="cli", sender_id="user", chat_id="test", content="/new")
         response = await loop._process_message(new_msg)
@@ -594,31 +621,3 @@ class TestNewCommandArchival:
         assert response is not None
         assert "new session started" in response.content.lower()
         assert loop.sessions.get_or_create("cli:test").messages == []
-
-    @pytest.mark.asyncio
-    async def test_close_mcp_drains_background_tasks(self, tmp_path: Path) -> None:
-        """close_mcp waits for background tasks to complete."""
-        from aeloon.core.bus.events import InboundMessage
-
-        loop = self._make_loop(tmp_path)
-        session = loop.sessions.get_or_create("cli:test")
-        for i in range(3):
-            session.add_message("user", f"msg{i}")
-            session.add_message("assistant", f"resp{i}")
-        loop.sessions.save(session)
-
-        archived = asyncio.Event()
-
-        async def _slow_consolidate(_messages) -> bool:
-            await asyncio.sleep(0.1)
-            archived.set()
-            return True
-
-        loop.memory_consolidator.consolidate_messages = _slow_consolidate  # type: ignore[method-assign]
-
-        new_msg = InboundMessage(channel="cli", sender_id="user", chat_id="test", content="/new")
-        await loop._process_message(new_msg)
-
-        assert not archived.is_set()
-        await loop.close_mcp()
-        assert archived.is_set()

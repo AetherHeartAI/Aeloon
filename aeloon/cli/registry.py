@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 if TYPE_CHECKING:
     from aeloon.core.bus.events import InboundMessage, OutboundMessage
@@ -12,6 +12,9 @@ CommandHandler = Callable[
     ["InboundMessage", str],
     "Awaitable[OutboundMessage | None] | OutboundMessage | None",
 ]
+
+# New-style handler signature: (CommandContext, args_str) -> str | None
+_NewStyleHandler = Callable[[Any, str], "Awaitable[str | None]"]
 
 
 @dataclass(frozen=True)
@@ -23,6 +26,7 @@ class CommandSpec:
     cli_path: tuple[str, ...] | None = None
     slash_path: tuple[str, ...] | None = None
     slash_paths: tuple[tuple[str, ...], ...] = ()
+    slash_help_overrides: tuple[tuple[tuple[str, ...], str], ...] = ()
     cli_aliases: tuple[tuple[str, ...], ...] = ()
     slash_aliases: tuple[tuple[str, ...], ...] = ()
     handler: CommandHandler | None = None
@@ -35,6 +39,17 @@ class CommandSpec:
         paths.extend(self.slash_paths)
         paths.extend(self.slash_aliases)
         return tuple(paths)
+
+    def slash_help_for(self, path: tuple[str, ...]) -> str:
+        """Return the description for one slash-visible path."""
+        for override_path, help_text in self.slash_help_overrides:
+            if override_path == path:
+                return help_text
+        return self.help
+
+    def iter_slash_entries(self) -> tuple[tuple[tuple[str, ...], str], ...]:
+        """Return slash-visible paths paired with their descriptions."""
+        return tuple((path, self.slash_help_for(path)) for path in self.iter_slash_paths())
 
 
 @dataclass(frozen=True)
@@ -57,6 +72,7 @@ class CommandCatalog:
     """Minimal registry for declared command metadata."""
 
     _specs: dict[str, CommandSpec] = field(default_factory=dict)
+    _handlers: dict[str, _NewStyleHandler] = field(default_factory=dict)
 
     @dataclass
     class _SlashNode:
@@ -69,6 +85,20 @@ class CommandCatalog:
     def register(self, spec: CommandSpec) -> None:
         """Add or replace one command spec."""
         self._specs[spec.name] = spec
+
+    def register_handler(self, label: str, handler: _NewStyleHandler) -> None:
+        """Register a new-style handler keyed by its slash label (e.g. '/help')."""
+        self._handlers[label.strip().lower()] = handler
+
+    def find_handler(self, label: str) -> _NewStyleHandler | None:
+        """Return the new-style handler for an exact slash label, case-insensitive."""
+        if not label:
+            return None
+        return self._handlers.get(label.strip().lower())
+
+    def all_new_handlers(self) -> dict[str, _NewStyleHandler]:
+        """Return a copy of all registered new-style handlers."""
+        return dict(self._handlers)
 
     def extend(self, specs: list[CommandSpec] | tuple[CommandSpec, ...]) -> None:
         """Register a batch of specs in order."""
@@ -84,14 +114,14 @@ class CommandCatalog:
         commands: list[tuple[str, str]] = []
         seen: set[str] = set()
         for spec in self._specs.values():
-            for path in spec.iter_slash_paths():
+            for path, desc in spec.iter_slash_entries():
                 if not path:
                     continue
                 label = "/" + " ".join(path)
                 if label in seen:
                     continue
                 seen.add(label)
-                commands.append((label, spec.help))
+                commands.append((label, desc))
         return commands
 
     def slash_labels(self) -> list[str]:

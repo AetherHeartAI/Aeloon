@@ -26,7 +26,11 @@ def _make_loop(tmp_path) -> AgentLoop:
         }
     )
     loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path, model="test-model")
-    loop.memory_consolidator.maybe_consolidate_by_tokens = AsyncMock(return_value=None)
+    object.__setattr__(
+        loop.memory.local_memory,
+        "maybe_compact_by_tokens",
+        AsyncMock(return_value=None),
+    )
     return loop
 
 
@@ -77,11 +81,10 @@ def test_build_bottom_toolbar_includes_model_and_context(tmp_path) -> None:
     loop = _make_loop(tmp_path)
     session = loop.sessions.get_or_create("cli:direct")
     session.messages = [{"role": "user", "content": "hello"}]
-    loop.memory_consolidator.estimate_session_prompt_tokens = MagicMock(return_value=(123, "mock"))
-
-    toolbar = agent_flow._build_bottom_toolbar(loop, "cli", "direct")
-    rendered = toolbar()
-    rendered_text = "".join(part[1] for part in rendered)
+    with patch.object(loop.memory, "estimate_session_prompt_tokens", return_value=(123, "mock")):
+        toolbar = agent_flow._build_bottom_toolbar(loop, "cli", "direct")
+        rendered = toolbar()
+        rendered_text = "".join(part[1] for part in rendered)
 
     assert "Model:" in rendered_text
     assert "test-model" in rendered_text
@@ -95,12 +98,12 @@ def test_build_bottom_toolbar_includes_gateway_hint_when_running(tmp_path, monke
     loop = _make_loop(tmp_path)
     session = loop.sessions.get_or_create("cli:direct")
     session.messages = [{"role": "user", "content": "hello"}]
-    loop.memory_consolidator.estimate_session_prompt_tokens = MagicMock(return_value=(123, "mock"))
     monkeypatch.setattr("aeloon.core.agent.channel_auth.GatewayManager.is_running", lambda: True)
 
-    toolbar = agent_flow._build_bottom_toolbar(loop, "cli", "direct")
-    rendered = toolbar()
-    rendered_text = "".join(part[1] for part in rendered)
+    with patch.object(loop.memory, "estimate_session_prompt_tokens", return_value=(123, "mock")):
+        toolbar = agent_flow._build_bottom_toolbar(loop, "cli", "direct")
+        rendered = toolbar()
+        rendered_text = "".join(part[1] for part in rendered)
 
     assert "Gateway: running" in rendered_text
     assert "Ctrl+L: logs" in rendered_text
@@ -188,6 +191,7 @@ def test_slash_command_completer_exposes_descriptions() -> None:
 
     assert completions
     texts = [c.text for c in completions]
+    assert "compact" in texts
     assert "resume" in texts
     assert "sessions" in texts
     assert "setting" in texts
@@ -325,15 +329,17 @@ async def test_sessions_command_lists_current_session(tmp_path) -> None:
     other.add_message("assistant", "world")
     loop.sessions.save(other)
 
-    response = await loop._process_message(
-        InboundMessage(channel="cli", sender_id="u", chat_id="direct", content="/sessions")
-    )
+    assert loop.memory.session_archive is not None
+    with patch.object(loop.memory.session_archive, "list_recent_sessions", return_value=[]):
+        response = await loop._process_message(
+            InboundMessage(channel="cli", sender_id="u", chat_id="direct", content="/sessions")
+        )
 
     assert response is not None
     assert "Recent sessions:" in response.content
     assert "cli:direct (current)" in response.content
     assert "cli:alt" in response.content
-    assert "/resume switch <session-key>" in response.content
+    assert "/resume switch <session-id-or-title>" in response.content
 
 
 @pytest.mark.asyncio
@@ -343,9 +349,11 @@ async def test_resume_command_lists_current_session(tmp_path) -> None:
     current.add_message("user", "hello")
     loop.sessions.save(current)
 
-    response = await loop._process_message(
-        InboundMessage(channel="cli", sender_id="u", chat_id="direct", content="/resume")
-    )
+    assert loop.memory.session_archive is not None
+    with patch.object(loop.memory.session_archive, "list_recent_sessions", return_value=[]):
+        response = await loop._process_message(
+            InboundMessage(channel="cli", sender_id="u", chat_id="direct", content="/resume")
+        )
 
     assert response is not None
     assert "Recent sessions:" in response.content
@@ -355,21 +363,22 @@ async def test_resume_command_lists_current_session(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_compact_archives_unconsolidated_session_messages(tmp_path) -> None:
     loop = _make_loop(tmp_path)
-    loop.memory_consolidator.archive_messages = AsyncMock(return_value=True)
     session = loop.sessions.get_or_create("cli:direct")
     session.add_message("user", "hello")
     session.add_message("assistant", "hi")
     loop.sessions.save(session)
 
-    response = await loop._process_message(
-        InboundMessage(channel="cli", sender_id="u", chat_id="direct", content="/compact")
-    )
+    with patch.object(loop.memory, "flush", AsyncMock(return_value=None)) as flush:
+        response = await loop._process_message(
+            InboundMessage(channel="cli", sender_id="u", chat_id="direct", content="/compact")
+        )
 
     assert response is not None
     assert response.content == "Compacted 2 messages from the current session."
-    loop.memory_consolidator.archive_messages.assert_awaited_once()
-    archived_messages = loop.memory_consolidator.archive_messages.await_args.args[0]
-    assert [message["content"] for message in archived_messages] == ["hello", "hi"]
+    flush.assert_awaited_once()
+    flush_kwargs = flush.await_args.kwargs
+    assert flush_kwargs["reason"] == "compact"
+    assert [message["content"] for message in flush_kwargs["pending_messages"]] == ["hello", "hi"]
     assert loop.sessions.get_or_create("cli:direct").last_consolidated == 2
 
 
@@ -402,47 +411,57 @@ async def test_compact_rejects_arguments(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_sessions_switch_returns_switch_metadata(tmp_path) -> None:
+async def test_sessions_switch_restores_archived_session(tmp_path) -> None:
     loop = _make_loop(tmp_path)
-    target = loop.sessions.get_or_create("cli:other")
-    target.add_message("user", "hello again")
-    loop.sessions.save(target)
+    archived = Session(key="cli:other")
+    archived.add_message("user", "hello again")
+    archived.add_message("assistant", "welcome back")
+    assert loop.memory.session_archive is not None
+    loop.memory.session_archive.ingest_session_sync(archived)
 
     response = await loop._process_message(
         InboundMessage(
             channel="cli",
             sender_id="u",
             chat_id="direct",
-            content="/sessions switch cli:other",
+            content=f"/sessions switch {archived.archive_session_id}",
         )
     )
+    restored = loop.sessions.get_or_create("cli:direct")
 
     assert response is not None
-    assert response.content == "Switching to session: cli:other"
+    assert response.content == f"Resumed archived session: {archived.archive_session_id}"
     assert response.metadata["_session_switch"] is True
-    assert response.metadata["session_key"] == "cli:other"
+    assert response.metadata["session_key"] == "cli:direct"
+    assert restored.archive_session_id == archived.archive_session_id
+    assert restored.messages[0]["content"] == "hello again"
 
 
 @pytest.mark.asyncio
-async def test_resume_switch_returns_switch_metadata(tmp_path) -> None:
+async def test_resume_command_restores_archived_session(tmp_path) -> None:
     loop = _make_loop(tmp_path)
-    target = loop.sessions.get_or_create("cli:other")
-    target.add_message("user", "hello again")
-    loop.sessions.save(target)
+    archived = Session(key="cli:other")
+    archived.add_message("user", "hello again")
+    archived.add_message("assistant", "welcome back")
+    assert loop.memory.session_archive is not None
+    loop.memory.session_archive.ingest_session_sync(archived)
 
     response = await loop._process_message(
         InboundMessage(
             channel="cli",
             sender_id="u",
             chat_id="direct",
-            content="/resume switch cli:other",
+            content=f"/resume {archived.archive_session_id}",
         )
     )
+    restored = loop.sessions.get_or_create("cli:direct")
 
     assert response is not None
-    assert response.content == "Switching to session: cli:other"
+    assert response.content == f"Resumed archived session: {archived.archive_session_id}"
     assert response.metadata["_session_switch"] is True
-    assert response.metadata["session_key"] == "cli:other"
+    assert response.metadata["session_key"] == "cli:direct"
+    assert restored.archive_session_id == archived.archive_session_id
+    assert restored.messages[1]["content"] == "welcome back"
 
 
 @pytest.mark.asyncio

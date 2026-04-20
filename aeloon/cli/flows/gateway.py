@@ -43,6 +43,24 @@ def _configure_gateway_log_sink() -> Path:
     return log_path
 
 
+async def _flush_cached_sessions_before_shutdown(agent_loop, *, reason: str) -> None:
+    seen: set[str] = set()
+    for item in agent_loop.sessions.list_sessions():
+        key = str(item.get("key") or "")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        session = agent_loop.sessions.get_or_create(key)
+        start_index = agent_loop.memory.pending_start_index(session)
+        pending_messages = list(session.messages[start_index:])
+        if pending_messages:
+            await agent_loop.memory.flush(
+                session=session,
+                pending_messages=pending_messages,
+                reason=reason,
+            )
+
+
 def run_gateway(
     *, port: int | None, workspace: str | None, verbose: bool, config: str | None
 ) -> None:
@@ -78,7 +96,10 @@ def run_gateway(
         actual_port,
         log_path,
     )
-    sync_workspace_templates(loaded_config.workspace_path)
+    sync_workspace_templates(
+        loaded_config.workspace_path,
+        include_file_memory=loaded_config.memory.prompt.enabled,
+    )
 
     bus = MessageBus()
     provider = make_provider(loaded_config)
@@ -101,6 +122,7 @@ def run_gateway(
         output_mode=loaded_config.agents.defaults.output_mode,
         fast=loaded_config.agents.defaults.fast,
         channels_config=loaded_config.channels,
+        memory_config=loaded_config.memory,
     )
 
     async def on_cron_job(job: CronJob) -> str | None:
@@ -228,6 +250,7 @@ def run_gateway(
             console.print("\n[red]Error: Gateway crashed unexpectedly[/red]")
             console.print(traceback.format_exc())
         finally:
+            await _flush_cached_sessions_before_shutdown(agent, reason="gateway-shutdown")
             if agent.plugin_manager:
                 await agent.plugin_manager.shutdown()
             await agent.close_mcp()

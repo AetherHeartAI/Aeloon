@@ -24,7 +24,11 @@ def _make_loop(tmp_path) -> tuple[AgentLoop, MessageBus]:
         }
     )
     loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path, model="test-model")
-    loop.memory_consolidator.maybe_consolidate_by_tokens = AsyncMock(return_value=None)
+    object.__setattr__(
+        loop.memory.local_memory,
+        "maybe_compact_by_tokens",
+        AsyncMock(return_value=None),
+    )
     return loop, bus
 
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import functools
 import os
 import sys
 from collections.abc import Mapping
@@ -16,10 +15,8 @@ from aeloon.cli.app import create_builtin_catalog
 from aeloon.cli.plugins import extend_catalog_with_plugin_commands
 from aeloon.cli.registry import CommandCatalog
 from aeloon.core.agent.channel_auth import ChannelAuthHelper
-from aeloon.core.agent.commands import (
-    CommandEnv,
-    all_handlers,
-)
+from aeloon.core.agent.commands import all_specs_and_handlers
+from aeloon.core.agent.commands._context import CommandContext as BuiltinCommandContext
 from aeloon.core.agent.turn import TurnContext
 from aeloon.core.bus.events import InboundMessage, OutboundMessage
 from aeloon.plugins._sdk.types import CommandContext, CommandExecutionContext, CommandMiddleware
@@ -52,8 +49,6 @@ class Dispatcher:
     def channel_manager(self, value: ChannelManager | None) -> None:
         self._channel_manager = value
         self._channel_auth.set_channel_manager(value)
-        if hasattr(self, "_command_env"):
-            self._command_env.channel_manager = value
 
     @property
     def running(self) -> bool:
@@ -128,7 +123,11 @@ class Dispatcher:
         """Start one dispatch task and track it under the session."""
         task = asyncio.create_task(self._dispatch(msg))
         self._active_tasks.setdefault(msg.session_key, []).append(task)
-        task.add_done_callback(lambda t, k=msg.session_key: self._remove_task(k, t))
+
+        def _remove_for_session(done_task: asyncio.Task[None]) -> None:
+            self._remove_task(msg.session_key, done_task)
+
+        task.add_done_callback(_remove_for_session)
 
     @staticmethod
     def _is_control_command(msg: InboundMessage) -> bool:
@@ -183,25 +182,13 @@ class Dispatcher:
         return catalog
 
     def _initialize_builtin_dispatch_state(self) -> None:
-        """Construct shared built-in command catalog and bound handlers."""
-        self._command_env = CommandEnv(
-            self._agent_loop,
-            channel_auth=self._channel_auth,
-            channel_manager=self._channel_manager,
-            plugin_catalog_fn=self._plugin_command_catalog,
-        )
-        bound_handlers = {
-            name: functools.partial(handler, self._command_env)
-            for name, handler in all_handlers().items()
-        }
-        self._builtin_command_catalog = create_builtin_catalog(bound_handlers)
-        self._builtin_handlers = {
-            "/" + " ".join(path): spec.handler
-            for spec in self._builtin_command_catalog.all()
-            if spec.handler is not None
-            for path in spec.iter_slash_paths()
-        }
-        self._command_env.builtin_catalog = self._builtin_command_catalog
+        """Construct shared built-in command catalog and register handlers."""
+        self._builtin_command_catalog = create_builtin_catalog()
+        # Register new-style handlers keyed by slash label.
+        for spec, handler in all_specs_and_handlers():
+            for path in spec.iter_slash_paths():
+                label = "/" + " ".join(path)
+                self._builtin_command_catalog.register_handler(label, handler)
 
     def _ensure_builtin_dispatch_state(self) -> None:
         """Initialize built-in dispatch state for tests that bypass __init__."""
@@ -218,7 +205,7 @@ class Dispatcher:
         if not hasattr(self, "_channel_auth"):
             self._channel_auth = ChannelAuthHelper()
         self._channel_auth.set_channel_manager(self._channel_manager)
-        if not hasattr(self, "_builtin_command_catalog") or not hasattr(self, "_builtin_handlers"):
+        if not hasattr(self, "_builtin_command_catalog"):
             self._initialize_builtin_dispatch_state()
 
     def _collect_command_middlewares(self) -> list[CommandMiddleware]:
@@ -279,6 +266,8 @@ class Dispatcher:
         self,
         msg: InboundMessage,
         text: str,
+        *,
+        media: list[str] | None = None,
     ) -> None:
         """Publish one plugin-originated command reply."""
         await self._agent_loop.bus.publish_outbound(
@@ -286,6 +275,7 @@ class Dispatcher:
                 channel=msg.channel,
                 chat_id=msg.chat_id,
                 content=text,
+                media=media or [],
             )
         )
 
@@ -324,8 +314,8 @@ class Dispatcher:
     ) -> OutboundMessage | None:
         """Execute one plugin command under dispatcher middleware and profiling."""
 
-        async def _plugin_reply(text: str) -> None:
-            await self._publish_command_reply(msg, text)
+        async def _plugin_reply(text: str = "", *, media: list[str] | None = None) -> None:
+            await self._publish_command_reply(msg, text, media=media)
 
         async def _plugin_progress(text: str, *, tool_hint: bool = False) -> None:
             await self._publish_command_progress(msg, text, tool_hint=tool_hint)
@@ -356,6 +346,14 @@ class Dispatcher:
 
         result = await self._run_command_with_middlewares(cmd, args_str, middleware_ctx, _execute)
 
+        self._inject_plugin_summary_into_session(
+            session_key=key,
+            cmd=cmd,
+            args_str=args_str,
+            result=result,
+            plugin_id=record.plugin_id,
+        )
+
         if self._agent_loop.runtime_settings.show_deep_profile and on_progress is None:
             await self._agent_loop._publish_deep_profile_report(msg)
         elif self._agent_loop.runtime_settings.show_profile and on_progress is None:
@@ -370,6 +368,102 @@ class Dispatcher:
                 content=result,
             )
         return None
+
+    def _inject_plugin_summary_into_session(
+        self,
+        *,
+        session_key: str,
+        cmd: str,
+        args_str: str,
+        result: str | None,
+        plugin_id: str,
+    ) -> None:
+        """Append a compact user/assistant message pair to the main session.
+
+        This lets the main agent see what the plugin did on subsequent turns
+        (e.g. the user can ask follow-up questions about a ``/sr`` report).
+        """
+        try:
+            session = self._agent_loop.sessions.get_or_create(session_key)
+            user_text = f"{cmd} {args_str}".strip()
+            if result:
+                # Keep only the first 2000 chars to avoid bloating the session.
+                truncated = result[:2000] + ("..." if len(result) > 2000 else "")
+                assistant_text = f"[Plugin {plugin_id} executed `{cmd}`]\n\n{truncated}"
+            else:
+                assistant_text = (
+                    f"[Plugin {plugin_id} executed `{cmd}` — completed with no text output]"
+                )
+            session.add_message("user", user_text)
+            session.add_message("assistant", assistant_text)
+            self._agent_loop.sessions.save(session)
+        except Exception:
+            logger.opt(exception=True).debug(
+                "Failed to inject plugin summary into session {}", session_key
+            )
+
+    async def _execute_builtin_command(
+        self,
+        *,
+        msg: InboundMessage,
+        session_key: str,
+        cmd: str,
+        args_str: str,
+    ) -> OutboundMessage | None:
+        """Build a CommandContext and invoke a new-style built-in handler."""
+        handler = self._builtin_command_catalog.find_handler(cmd)
+        if handler is None:
+            return self._unknown_command_response(msg, cmd)
+
+        async def _builtin_progress(text: str, *, tool_hint: bool = False) -> None:
+            await self._publish_command_progress(msg, text, tool_hint=tool_hint)
+
+        ctx = BuiltinCommandContext.from_dispatch(
+            agent_loop=self._agent_loop,
+            msg=msg,
+            session_key=session_key,
+            is_builtin=True,
+            send_progress=_builtin_progress,
+            channel_auth=self._channel_auth,
+            channel_manager=self._channel_manager,
+            builtin_catalog=self._builtin_command_catalog,
+            plugin_catalog_fn=self._plugin_command_catalog,
+        )
+        middleware_ctx = self._build_command_execution_context(
+            msg=msg,
+            session_key=session_key,
+            is_builtin=True,
+            send_progress=_builtin_progress,
+        )
+
+        async def _execute() -> OutboundMessage | None:
+            result = await handler(ctx, args_str)
+            # Handle /restart side-effect
+            if ctx._restart_requested:
+                if msg.channel == "cli":
+                    metadata = dict(msg.metadata or {})
+                    metadata["_restart_requested"] = True
+                    return OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content="Restarting...",
+                        metadata=metadata,
+                    )
+                await self._do_restart(msg)
+                return None
+            content = result if result is not None else ""
+            metadata = dict(msg.metadata or {})
+            metadata.update(ctx._metadata)
+            if not content and not metadata:
+                return None
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=content,
+                metadata=metadata if metadata != dict(msg.metadata or {}) else (msg.metadata or {}),
+            )
+
+        return await self._run_command_with_middlewares(cmd, args_str, middleware_ctx, _execute)
 
     def _known_slash_commands(self) -> list[str]:
         return self._slash_command_catalog().slash_labels()
@@ -409,12 +503,16 @@ class Dispatcher:
                 content="Restarting...",
             )
         )
+        await self._do_restart(msg)
 
-        async def _do_restart() -> None:
+    async def _do_restart(self, _msg: InboundMessage) -> None:
+        """Schedule an in-place process restart."""
+
+        async def _restart() -> None:
             await asyncio.sleep(1)
             os.execv(sys.executable, [sys.executable, "-m", "aeloon"] + sys.argv[1:])
 
-        asyncio.create_task(_do_restart())
+        asyncio.create_task(_restart())
 
     def _extract_debug_error(
         self, content: str, metadata: Mapping[str, object] | None
@@ -522,22 +620,13 @@ class Dispatcher:
         if cmd.startswith("/"):
             dispatch_msg = msg if key == msg.session_key else replace(msg, session_key_override=key)
             args_str = " ".join(cmd_parts[1:])
-            handler = self._builtin_handlers.get(cmd)
+            handler = self._builtin_command_catalog.find_handler(cmd)
             if handler is not None:
-                middleware_ctx = self._build_command_execution_context(
-                    msg=msg,
+                return await self._execute_builtin_command(
+                    msg=dispatch_msg,
                     session_key=key,
-                    is_builtin=True,
-                )
-
-                async def _execute_builtin() -> OutboundMessage | None:
-                    return await handler(dispatch_msg, args_str)
-
-                return await self._run_command_with_middlewares(
-                    cmd,
-                    args_str,
-                    middleware_ctx,
-                    _execute_builtin,
+                    cmd=cmd,
+                    args_str=args_str,
                 )
 
             pm = getattr(self._agent_loop, "plugin_manager", None)

@@ -4,23 +4,25 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
 
 import typer
 
 from aeloon.cli.app import console
+from aeloon.core.config.env import load_profile_env
 from aeloon.core.config.schema import Config
+from aeloon.providers.base import LLMProvider
 
 
-def make_provider(config: Config) -> Any:
+def make_provider(config: Config) -> LLMProvider:
     """Create the appropriate LLM provider from config."""
     from aeloon.providers.azure_openai_provider import AzureOpenAIProvider
     from aeloon.providers.base import GenerationSettings
     from aeloon.providers.openai_codex_provider import OpenAICodexProvider
 
     model = config.agents.defaults.model
-    provider_name = config.get_provider_name(model)
+    provider_name = config.get_provider_name(model) or "custom"
     provider_config = config.get_provider(model)
+    provider: LLMProvider
 
     if provider_name == "openai_codex" or model.startswith("openai-codex/"):
         provider = OpenAICodexProvider(default_model=model)
@@ -77,7 +79,7 @@ def make_provider(config: Config) -> Any:
 
 def load_runtime_config(config: str | None = None, workspace: str | None = None) -> Config:
     """Load config and optionally override the active workspace."""
-    from aeloon.core.config.loader import load_config, set_config_path
+    from aeloon.core.config.loader import get_config_path, load_config, set_config_path
 
     config_path = None
     if config:
@@ -89,6 +91,8 @@ def load_runtime_config(config: str | None = None, workspace: str | None = None)
         console.print(f"[dim]Using config: {config_path}[/dim]")
 
     loaded = load_config(config_path)
+    active_config_path = config_path or get_config_path()
+    load_profile_env(active_config_path)
     if workspace:
         loaded.agents.defaults.workspace = workspace
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "true" if loaded.agents.defaults.fast else "false"

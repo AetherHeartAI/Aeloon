@@ -3,9 +3,9 @@
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Base(BaseModel):
@@ -136,6 +136,75 @@ class ExecToolConfig(Base):
     path_append: str = ""
 
 
+class PromptMemoryConfig(Base):
+    """Always-on local prompt memory settings."""
+
+    enabled: bool = True
+    directory: str = "memory"
+    memory_file: str = Field(default="MEMORY.md", alias="memoryFile")
+    user_file: str = Field(default="USER.md", alias="userFile")
+    memory_char_limit: int = Field(default=2200, alias="memoryCharLimit")
+    user_char_limit: int = Field(default=1375, alias="userCharLimit")
+
+
+class LocalMemoryConfig(Base):
+    """Fixed local-memory compaction settings."""
+
+    history_file: str = Field(
+        default="HISTORY.md",
+        alias="historyFile",
+        description="Compatibility-only setting retained for config migration; runtime ignores it.",
+    )
+    max_failures_before_raw_archive: int = Field(
+        default=3,
+        alias="maxFailuresBeforeRawArchive",
+        ge=1,
+    )
+    trigger_ratio: float = Field(default=1.0, alias="triggerRatio")
+    target_ratio: float = Field(default=0.5, alias="targetRatio")
+    max_consolidation_rounds: int = Field(default=5, alias="maxConsolidationRounds", ge=1)
+
+
+class SessionArchiveConfig(Base):
+    """Transcript archive sidecar settings."""
+
+    enabled: bool = True
+    database: str = "archive.db"
+
+
+class MemoryFlushConfig(Base):
+    """Flush lifecycle settings."""
+
+    enabled: bool = True
+
+
+class MemoryConfig(Base):
+    """Layered memory config with fixed local memory plus optional provider."""
+
+    prompt: PromptMemoryConfig = Field(default_factory=PromptMemoryConfig)
+    local: LocalMemoryConfig = Field(default_factory=LocalMemoryConfig)
+    archive: SessionArchiveConfig = Field(default_factory=SessionArchiveConfig)
+    flush: MemoryFlushConfig = Field(default_factory=MemoryFlushConfig)
+    provider: str | None = None
+    providers: dict[str, dict[str, object]] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_provider(self) -> "MemoryConfig":
+        provider = self.provider.strip() if isinstance(self.provider, str) else ""
+        self.provider = provider or None
+
+        if self.provider == "openviking" and "openviking" not in self.providers:
+            raise ValueError(
+                "memory.providers.openviking is required when memory.provider='openviking'"
+            )
+        if self.provider is not None and self.provider not in self.providers:
+            raise ValueError(
+                f"memory.providers.{self.provider} is required when "
+                f"memory.provider='{self.provider}'"
+            )
+        return self
+
+
 class MCPServerConfig(Base):
     """MCP server settings."""
 
@@ -193,6 +262,7 @@ class Config(BaseSettings):
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
     plugins: dict[str, Any] = Field(default_factory=dict)
     hooks: dict[str, list[HookEntryConfig]] = Field(default_factory=dict)
 
@@ -288,4 +358,8 @@ class Config(BaseSettings):
                 return spec.default_api_base
         return None
 
-    model_config = ConfigDict(env_prefix="AELOON_", env_nested_delimiter="__", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="AELOON_",
+        env_nested_delimiter="__",
+        extra="ignore",
+    )

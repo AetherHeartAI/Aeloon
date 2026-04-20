@@ -172,7 +172,11 @@ def estimate_prompt_tokens_chain(
     return 0, "none"
 
 
-def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]:
+def sync_workspace_templates(
+    workspace: Path,
+    silent: bool = False,
+    include_file_memory: bool = True,
+) -> list[str]:
     """Copy bundled templates into a workspace when missing."""
     from importlib.resources import files as pkg_files
 
@@ -195,8 +199,9 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
     for item in tpl.iterdir():
         if item.name.endswith(".md") and not item.name.startswith("."):
             _write(item, workspace / item.name)
-    _write(tpl / "memory" / "MEMORY.md", workspace / "memory" / "MEMORY.md")
-    _write(None, workspace / "memory" / "HISTORY.md")
+    if include_file_memory:
+        _write(tpl / "memory" / "MEMORY.md", workspace / "memory" / "MEMORY.md")
+        _write(tpl / "memory" / "USER.md", workspace / "memory" / "USER.md")
     (workspace / "skills").mkdir(exist_ok=True)
     (workspace / "compiled_skills").mkdir(exist_ok=True)
     (workspace / "outputs").mkdir(exist_ok=True)

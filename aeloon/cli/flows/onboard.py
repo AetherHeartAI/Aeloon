@@ -12,6 +12,18 @@ from aeloon.core.config.schema import Config
 from aeloon.utils.helpers import sync_workspace_templates
 
 
+def _print_memory_backend_guidance(config_path: Path) -> None:
+    console.print("\nMemory layers:")
+    console.print("  - [cyan]prompt memory[/cyan]: local `memory/MEMORY.md` + `memory/USER.md`")
+    console.print("  - [cyan]archive[/cyan]: searchable transcript sidecar")
+    console.print("  - [cyan]provider[/cyan]: optional additive provider such as OpenViking")
+    console.print(
+        "    Configure provider details with "
+        f"[cyan]aeloon memory setup openviking --config {config_path}[/cyan]"
+    )
+    console.print("    Prompt memory and archive remain active when a provider is enabled.")
+
+
 def run_onboard(*, workspace: str | None, config: str | None) -> None:
     """Initialize aeloon configuration and workspace."""
     from aeloon.core.config.loader import get_config_path, load_config, save_config, set_config_path
@@ -52,12 +64,16 @@ def run_onboard(*, workspace: str | None, config: str | None) -> None:
     console.print(
         "[dim]Config template now uses `maxTokens` + `contextWindowTokens`; `memoryWindow` is no longer a runtime setting.[/dim]"
     )
+    _print_memory_backend_guidance(config_path)
     onboard_plugins(config_path)
     workspace_path = get_workspace_path(loaded.workspace_path)
     if not workspace_path.exists():
         workspace_path.mkdir(parents=True, exist_ok=True)
         console.print(f"[green]✓[/green] Created workspace at {workspace_path}")
-    sync_workspace_templates(workspace_path)
+    sync_workspace_templates(
+        workspace_path,
+        include_file_memory=loaded.memory.prompt.enabled,
+    )
 
     agent_cmd = 'aeloon agent -m "Hello."'
     if config:

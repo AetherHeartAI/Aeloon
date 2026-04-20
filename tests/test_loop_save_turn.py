@@ -1,5 +1,13 @@
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 from aeloon.core.agent.context import ContextBuilder
+from aeloon.core.agent.loop import AgentLoop
+from aeloon.core.bus.queue import MessageBus
 from aeloon.core.session.manager import Session, SessionManager
+from aeloon.memory.types import TurnMemoryContext
+from aeloon.providers.base import LLMResponse
 
 
 def _mk_manager(tmp_path) -> SessionManager:
@@ -82,3 +90,83 @@ def test_save_turn_keeps_tool_results_under_16k(tmp_path) -> None:
     )
 
     assert session.messages[0]["content"] == content
+
+
+class _FakeMemoryManager:
+    def __init__(self) -> None:
+        self.prepare_called = False
+        self.after_turn_called = False
+
+    async def prepare_turn(self, **kwargs) -> TurnMemoryContext:
+        self.prepare_called = True
+        return TurnMemoryContext(
+            system_sections=["# Memory Recall\n\nnone"],
+            runtime_lines=["Memory mode: fake"],
+            always_skill_names=[],
+            history_start_index=0,
+        )
+
+    async def after_turn(self, **kwargs) -> None:
+        self.after_turn_called = True
+
+    def pending_start_index(self, session: Session) -> int:
+        return 0
+
+    async def on_new_session(self, **kwargs) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+
+class _FakeArchiveService:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+
+    async def ingest_session(self, session: Session) -> None:
+        self.calls.append((session.key, len(session.messages)))
+
+    async def close(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_loop_uses_memory_manager_prepare_turn_before_llm(tmp_path) -> None:
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    provider.chat_with_retry = AsyncMock(return_value=LLMResponse(content="ok", tool_calls=[]))
+
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path,
+        model="test-model",
+    )
+    object.__setattr__(loop.tools, "get_definitions", MagicMock(return_value=[]))
+    manager = _FakeMemoryManager()
+    setattr(loop, "memory", manager)
+
+    await loop.process_direct("hello", session_key="cli:test")
+
+    assert manager.prepare_called is True
+
+
+@pytest.mark.asyncio
+async def test_loop_ingests_persisted_turn_into_archive_after_save(tmp_path) -> None:
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    provider.chat_with_retry = AsyncMock(return_value=LLMResponse(content="ok", tool_calls=[]))
+
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path,
+        model="test-model",
+    )
+    archive = _FakeArchiveService()
+    loop.memory.session_archive = archive
+
+    await loop.process_direct("hello", session_key="cli:test-archive")
+    await loop.memory.close()
+
+    assert archive.calls == [("cli:test-archive", 2)]

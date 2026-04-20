@@ -8,7 +8,6 @@ import platform
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from aeloon.core.agent.memory import MemoryStore
 from aeloon.core.agent.skills import SkillsLoader
 from aeloon.plugins.SkillGraph.workflow_loader import WorkflowLoader
 from aeloon.plugins.SkillGraph.workflow_state import WorkflowStateStore
@@ -26,7 +25,6 @@ class ContextBuilder:
 
     def __init__(self, workspace: Path):
         self.workspace = workspace
-        self.memory = MemoryStore(workspace)
         self.skills = SkillsLoader(workspace)
         self.workflows = WorkflowLoader(workspace)
         self.workflow_states = WorkflowStateStore(workspace)
@@ -40,17 +38,25 @@ class ContextBuilder:
         self,
         skill_names: list[str] | None = None,
         session_key: str | None = None,
+        *,
+        extra_system_sections: list[str] | None = None,
+        runtime_lines: list[str] | None = None,
+        extra_always_skills: list[str] | None = None,
+        exclude_skill_names: list[str] | None = None,
     ) -> str:
-        """Build the system prompt from identity, bootstrap files, memory, and skills."""
+        """Build the system prompt from generic prompt parts plus backend-provided sections."""
         parts = [self._get_identity()]
+        excluded = set(exclude_skill_names or [])
 
         bootstrap = self._load_bootstrap_files()
         if bootstrap:
             parts.append(bootstrap)
 
-        memory = self.memory.get_memory_context()
-        if memory:
-            parts.append(f"# Memory\n\n{memory}")
+        if runtime_lines:
+            parts.append("# Runtime\n\n" + "\n".join(runtime_lines))
+
+        if extra_system_sections:
+            parts.extend(section for section in extra_system_sections if section)
 
         if self._output_manager:
             recent = self._output_manager.list_recent(limit=8)
@@ -58,13 +64,16 @@ class ContextBuilder:
                 lines = [f"- `{entry['path']}` — {entry.get('title', '')}" for entry in recent]
                 parts.append("# Recent Outputs\n\n" + "\n".join(lines))
 
-        always_skills = self.skills.get_always_skills()
+        always_skills = self.skills.get_always_skills(exclude_names=excluded)
+        if extra_always_skills:
+            filtered = [name for name in extra_always_skills if name not in excluded]
+            always_skills = list(dict.fromkeys([*always_skills, *filtered]))
         if always_skills:
             always_content = self.skills.load_skills_for_context(always_skills)
             if always_content:
                 parts.append(f"# Active Skills\n\n{always_content}")
 
-        skills_summary = self.skills.build_skills_summary()
+        skills_summary = self.skills.build_skills_summary(exclude_names=excluded)
         if skills_summary:
             parts.append(f"""# Skills
 
@@ -124,9 +133,6 @@ You are aeloon, a helpful AI assistant.
 
 ## Workspace
 Your workspace is at: {workspace_path}
-- Long-term memory: {workspace_path}/memory/MEMORY.md (write important facts here)
-- History log: {workspace_path}/memory/HISTORY.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
-- Outputs: {workspace_path}/outputs/ (structured output artifacts with manifest.jsonl)
 - Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md
 
 {platform_policy}
@@ -167,6 +173,11 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
         history: list[dict[str, Any]],
         current_message: str,
         skill_names: list[str] | None = None,
+        extra_system_sections: list[str] | None = None,
+        runtime_lines: list[str] | None = None,
+        extra_always_skills: list[str] | None = None,
+        exclude_skill_names: list[str] | None = None,
+        recalled_context_blocks: list[str] | None = None,
         media: list[str] | None = None,
         channel: str | None = None,
         chat_id: str | None = None,
@@ -179,15 +190,24 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
 
         # Merge runtime context and user content into a single user message
         # to avoid consecutive same-role messages that some providers reject.
+        prelude_blocks = [runtime_ctx, *(recalled_context_blocks or [])]
+        merged: str | list[dict[str, Any]]
         if isinstance(user_content, str):
-            merged = f"{runtime_ctx}\n\n{user_content}"
+            merged = "\n\n".join([*prelude_blocks, user_content])
         else:
-            merged = [{"type": "text", "text": runtime_ctx}] + user_content
+            merged = [{"type": "text", "text": block} for block in prelude_blocks] + user_content
 
         return [
             {
                 "role": "system",
-                "content": self.build_system_prompt(skill_names, session_key=session_key),
+                "content": self.build_system_prompt(
+                    skill_names,
+                    session_key=session_key,
+                    extra_system_sections=extra_system_sections,
+                    runtime_lines=runtime_lines,
+                    extra_always_skills=extra_always_skills,
+                    exclude_skill_names=exclude_skill_names,
+                ),
             },
             *history,
             {"role": current_role, "content": merged},

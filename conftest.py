@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import inspect
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -67,6 +68,22 @@ def pytest_collection_modifyitems(config: Any, items: list[Any]) -> None:  # noq
                     pytest.mark.skip(reason=f"Optional plugin package not present: {module_name}")
                 )
                 break
+
+
+@pytest.fixture(autouse=True)
+def _restore_memory_registry() -> Iterator[None]:
+    try:
+        from aeloon.memory import registry as memory_registry
+    except ImportError:
+        yield
+        return
+
+    snapshot = dict(memory_registry._REGISTRY)
+    try:
+        yield
+    finally:
+        memory_registry._REGISTRY.clear()
+        memory_registry._REGISTRY.update(snapshot)
 
 
 def pytest_pyfunc_call(pyfuncitem: Any) -> bool | None:
