@@ -108,6 +108,17 @@ def test_context_builder_accepts_backend_runtime_lines(tmp_path) -> None:
     assert "HISTORY.md" not in prompt
 
 
+def test_context_builder_includes_plugin_catalog_when_set(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    builder = ContextBuilder(workspace)
+
+    builder.set_plugin_catalog("# Plugins\n\n## demo\nA demo plugin")
+    prompt = builder.build_system_prompt()
+
+    assert "# Plugins" in prompt
+    assert "## demo" in prompt
+
+
 class _FakePromptLocalMemory:
     async def prepare_turn(
         self,

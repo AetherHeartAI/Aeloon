@@ -29,10 +29,15 @@ class ContextBuilder:
         self.workflows = WorkflowLoader(workspace)
         self.workflow_states = WorkflowStateStore(workspace)
         self._output_manager: OutputManager | None = None
+        self._plugin_catalog: str = ""
 
     def set_output_manager(self, manager: OutputManager) -> None:
         """Attach an OutputManager for recent-outputs injection."""
         self._output_manager = manager
+
+    def set_plugin_catalog(self, catalog: str) -> None:
+        """Attach plugin catalog text for system prompt injection."""
+        self._plugin_catalog = catalog
 
     def build_system_prompt(
         self,
@@ -57,6 +62,9 @@ class ContextBuilder:
 
         if extra_system_sections:
             parts.extend(section for section in extra_system_sections if section)
+
+        if self._plugin_catalog:
+            parts.append(self._plugin_catalog)
 
         if self._output_manager:
             recent = self._output_manager.list_recent(limit=8)
